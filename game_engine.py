@@ -21,6 +21,7 @@ from events.level_select import LevelSelectMenu
 from events.loading import LoadingScreen
 from events.tab_menu import TabMenu
 from events.level_title import LevelTitleBanner
+from events.controls_info import ControlsInfoOverlay
 
 # Weapons directory imports
 from weapons.sword.sword import Sword
@@ -42,6 +43,7 @@ class GameEngine:
         self.loading_screen = LoadingScreen(SCREEN_WIDTH, SCREEN_HEIGHT)
         self.tab_menu = TabMenu(SCREEN_WIDTH, SCREEN_HEIGHT)
         self.title_banner = LevelTitleBanner(SCREEN_WIDTH, SCREEN_HEIGHT)
+        self.controls_overlay = ControlsInfoOverlay(SCREEN_WIDTH, SCREEN_HEIGHT)
         self.custom_cursor = CustomCursor()
         self.camera = Camera()
 
@@ -62,7 +64,7 @@ class GameEngine:
         self.modal = DialogModal()
 
         self.font = pygame.font.SysFont("Arial", 20)
-        self.small_font = pygame.font.SysFont("Arial", 14)
+        self.small_font = pygame.font.SysFont("Arial", 12)
 
         self.game_won = False
         self.show_minimap = True
@@ -102,7 +104,6 @@ class GameEngine:
         self.map_name = file_name
 
     def get_next_level_file(self):
-        """Finds the next map file in maps/ directory alphabetically."""
         if not os.path.exists("maps"):
             return None
         maps = sorted([f for f in os.listdir("maps") if f.endswith(".txt")])
@@ -167,6 +168,9 @@ class GameEngine:
                             self.modal.hide()
                         self.tab_menu.show() if not self.tab_menu.active else self.tab_menu.hide()
 
+                    elif event.key == pygame.K_i:
+                        self.controls_overlay.toggle()
+
                     elif event.key == pygame.K_e:
                         if self.modal.active:
                             self.modal.hide()
@@ -228,7 +232,6 @@ class GameEngine:
                 self.tab_menu.hide()
                 self.game_won = False
                 
-                # Trigger Title Banner Animation upon loading completion
                 self.title_banner.trigger(area_name="Grimstone Fortress", level_name=self.map_name)
                 self.game_state = "GAMEPLAY"
 
@@ -237,17 +240,16 @@ class GameEngine:
             mouse_world = self.camera.get_mouse_world()
 
             self.title_banner.update()
+            self.controls_overlay.update()
             self.minimap_alpha += (self.target_alpha - self.minimap_alpha) * 0.15
             self.player_stats.update()
 
             if not self.game_won and not self.modal.active and not self.tab_menu.active:
-                # Key Pickup Check
                 for key in self.keys:
                     if not key.collected and self.player_rect.colliderect(key.rect):
                         key.collected = True
                         self.player_stats.add_key(key.key_id)
 
-                # Door Collisions
                 closed_door_rects = [door.rect for door in self.doors if not door.is_open]
                 active_obstacles = self.walls + closed_door_rects
 
@@ -314,15 +316,18 @@ class GameEngine:
                             sign.draw_prompt(self.screen, self.small_font, camera_offset=cam_offset, zoom=ZOOM)
                             break
 
-            # HUD & Menus
+            # HUD Header Text
             info_text = self.font.render(f"Map: {self.map_name} | [TAB] Pause Menu | [E] Interact", True, TEXT_COLOR)
             self.screen.blit(info_text, (20, 15))
 
             self.player_stats.draw_hud(self.screen, self.font)
             draw_minimap(self.screen, self.walls, self.player_rect, self.chest_rect, self.minimap_alpha, self.font)
             
-            # Render Cinematic Location Title Banner
+            # Location Title Banner
             self.title_banner.draw(self.screen)
+
+            # Separate Controls Overlay System
+            self.controls_overlay.draw(self.screen)
 
             self.modal.draw(self.screen, self.font)
             self.tab_menu.draw(self.screen)
@@ -340,7 +345,7 @@ class GameEngine:
                 win_text = self.font.render(msg, True, CHEST_COLOR)
                 self.screen.blit(win_text, (SCREEN_WIDTH // 2 - win_text.get_width() // 2, SCREEN_HEIGHT // 2 - 20))
 
-        # Render Custom Cursor
+        # Custom Cursor
         self.custom_cursor.draw(self.screen)
         pygame.display.flip()
         self.clock.tick(60)
