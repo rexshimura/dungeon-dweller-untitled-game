@@ -8,10 +8,10 @@ class PlayerStats:
         
         self.max_mp = 5
         self.current_mp = 5.0  # Float for smooth regeneration
-        self.mp_regen_rate = 0.015  # Recovers 1 MP roughly every 1.1 seconds
+        self.mp_regen_rate = 0.005 # MP per frame
         
         self.base_damage = 10
-        self.move_speed = 2.4
+        self.move_speed = 1.2
 
     def update(self):
         """Regenerate MP over time up to max_mp."""

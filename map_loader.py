@@ -4,27 +4,28 @@ import pygame
 
 TILE_SIZE = 28
 
-# Clean Default Wall Colors
 COLOR_WALL = (120, 125, 140)
 COLOR_WALL_BORDER = (80, 85, 100)
 COLOR_WOOD = (110, 65, 25)
 COLOR_FLAME_OUTER = (255, 130, 20)
 COLOR_FLAME_INNER = (255, 230, 100)
 
-def create_floor_light_cookie(radius=100):
-    """Generates a warm, subtle radial light cookie to color floor tiles."""
+# Cached surface for pre-baked floor glows
+BAKED_FLOOR_GLOW_SURFACE = None
+
+def create_floor_light_cookie(radius=85):
+    """Generates a very soft, dim radial light cookie for floor tiles."""
     size = radius * 2
     surf = pygame.Surface((size, size), pygame.SRCALPHA)
     
+    # Very dim warm glow (Max alpha reduced to 45)
     for r in range(radius, 0, -2):
-        # Subtle warm glow on floor (max alpha ~90 for soft color tint)
-        alpha = int(90 * (1.0 - (r / radius) ** 1.6))
-        pygame.draw.circle(surf, (255, 160, 50, alpha), (radius, radius), r)
+        alpha = int(45 * (1.0 - (r / radius) ** 1.5))
+        pygame.draw.circle(surf, (220, 120, 20, alpha), (radius, radius), r)
         
     return surf
 
-# Pre-render floor glow surface
-FLOOR_TORCH_GLOW = create_floor_light_cookie(110)
+FLOOR_TORCH_GLOW_COOKIE = create_floor_light_cookie(85)
 
 class TorchParticle:
     def __init__(self, x, y):
@@ -102,6 +103,58 @@ def detect_attachment(lines, r, c):
     
     return 'NONE'
 
+def _bake_static_floor_glows(walls, torches, map_cols, map_rows):
+    """Bakes steady, dim torch floor glows and casts wall shadows ONCE on load."""
+    global BAKED_FLOOR_GLOW_SURFACE
+    w, h = map_cols * TILE_SIZE, map_rows * TILE_SIZE
+    BAKED_FLOOR_GLOW_SURFACE = pygame.Surface((w, h), pygame.SRCALPHA)
+
+    radius = 85
+    for torch in torches:
+        tx, ty = torch.flame_pos.x, torch.flame_pos.y
+        torch_pos = torch.flame_pos
+
+        cookie_surf = pygame.Surface((radius * 2, radius * 2), pygame.SRCALPHA)
+        cookie_surf.blit(FLOOR_TORCH_GLOW_COOKIE, (0, 0))
+
+        offset_x, offset_y = tx - radius, ty - radius
+        nearby_walls = [
+            w_rect for w_rect in walls 
+            if abs(w_rect.centerx - tx) < radius + 60 and abs(w_rect.centery - ty) < radius + 60
+        ]
+
+        for wall in nearby_walls:
+            edges = [
+                ((wall.left, wall.top), (wall.right, wall.top)),
+                ((wall.right, wall.top), (wall.right, wall.bottom)),
+                ((wall.right, wall.bottom), (wall.left, wall.bottom)),
+                ((wall.left, wall.bottom), (wall.left, wall.top))
+            ]
+            for p1, p2 in edges:
+                edge_vec = pygame.Vector2(p2[0] - p1[0], p2[1] - p1[1])
+                normal = pygame.Vector2(-edge_vec.y, edge_vec.x)
+                midpoint = pygame.Vector2((p1[0] + p2[0]) / 2, (p1[1] + p2[1]) / 2)
+                
+                if normal.dot(torch_pos - midpoint) <= 0:
+                    v1 = pygame.Vector2(p1[0] - tx, p1[1] - ty)
+                    v2 = pygame.Vector2(p2[0] - tx, p2[1] - ty)
+                    if v1.length() > 0 and v2.length() > 0:
+                        proj1 = pygame.Vector2(p1[0], p1[1]) + v1.normalize() * (radius * 2)
+                        proj2 = pygame.Vector2(p2[0], p2[1]) + v2.normalize() * (radius * 2)
+
+                        quad = [
+                            (p1[0] - offset_x, p1[1] - offset_y),
+                            (p2[0] - offset_x, p2[1] - offset_y),
+                            (proj2.x - offset_x, proj2.y - offset_y),
+                            (proj1.x - offset_x, proj1.y - offset_y)
+                        ]
+                        pygame.draw.polygon(cookie_surf, (0, 0, 0, 0), quad)
+
+            wall_local = pygame.Rect(wall.x - offset_x, wall.y - offset_y, wall.width, wall.height)
+            pygame.draw.rect(cookie_surf, (0, 0, 0, 0), wall_local)
+
+        BAKED_FLOOR_GLOW_SURFACE.blit(cookie_surf, (offset_x, offset_y))
+
 def load_random_map(maps_folder="maps"):
     map_files = [f for f in os.listdir(maps_folder) if f.endswith(".txt")]
     if not map_files:
@@ -118,6 +171,9 @@ def load_random_map(maps_folder="maps"):
     with open(filepath, "r") as f:
         lines = [line.strip() for line in f.readlines() if line.strip()]
 
+    rows = len(lines)
+    cols = max(len(line) for line in lines)
+
     for r, line in enumerate(lines):
         for c, char in enumerate(line):
             rect = pygame.Rect(c * TILE_SIZE, r * TILE_SIZE, TILE_SIZE, TILE_SIZE)
@@ -132,20 +188,17 @@ def load_random_map(maps_folder="maps"):
             elif char == 'X':
                 exit_start = (c, r)
 
+    _bake_static_floor_glows(walls, torches, cols, rows)
+
     return walls, torches, player_start, exit_start, chosen_file
 
 def draw_dungeon(surface, walls, torches):
-    # 1. Draw Floor Light Glow centered on each torch flame FIRST
-    for torch in torches:
-        glow_r = 110
-        tx, ty = torch.flame_pos.x, torch.flame_pos.y
-        surface.blit(FLOOR_TORCH_GLOW, (tx - glow_r, ty - glow_r))
+    if BAKED_FLOOR_GLOW_SURFACE:
+        surface.blit(BAKED_FLOOR_GLOW_SURFACE, (0, 0))
 
-    # 2. Draw Walls OVER top of floor light (keeps walls dark & crisp)
     for wall in walls:
         pygame.draw.rect(surface, COLOR_WALL, wall, border_radius=2)
         pygame.draw.rect(surface, COLOR_WALL_BORDER, wall, 1, border_radius=2)
 
-    # 3. Draw Torch brackets, flames, and sparks
     for torch in torches:
         torch.draw(surface)

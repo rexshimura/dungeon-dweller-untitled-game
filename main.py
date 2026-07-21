@@ -13,7 +13,7 @@ screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
 pygame.display.set_caption("Dungeon Crawler")
 clock = pygame.time.Clock()
 
-ZOOM = 2.2
+ZOOM = 2.8
 MAP_WIDTH, MAP_HEIGHT = 1600, 1200
 world_surface = pygame.Surface((MAP_WIDTH, MAP_HEIGHT))
 
