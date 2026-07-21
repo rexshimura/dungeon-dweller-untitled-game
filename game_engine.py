@@ -40,8 +40,8 @@ class GameEngine:
         self.custom_cursor = CustomCursor()
         self.camera = Camera()
 
-        # Gameplay Entities & Dynamic Map Attributes
-        self.walls, self.torches, self.signs, self.floor_tiles = [], [], [], []
+        # Gameplay Entities
+        self.walls, self.torches, self.signs, self.doors, self.keys, self.floor_tiles = [], [], [], [], [], []
         self.player_rect = None
         self.chest_rect = None
         self.map_name = ""
@@ -67,7 +67,7 @@ class GameEngine:
 
     def reset_game(self):
         (
-            walls, torches, signs, floor_tiles,
+            walls, torches, signs, doors, keys, floor_tiles,
             player_start, exit_start, file_name,
             map_w, map_h
         ) = load_random_map("maps")
@@ -75,7 +75,6 @@ class GameEngine:
         self.map_w = map_w
         self.map_h = map_h
 
-        # Re-create world surface to match the EXACT loaded map pixel size
         self.world_surface = pygame.Surface((self.map_w, self.map_h))
 
         player_size = 12
@@ -90,7 +89,9 @@ class GameEngine:
         exit_y = exit_start[1] * TILE_SIZE + 6
         self.chest_rect = pygame.Rect(exit_x, exit_y, 28, 28)
 
-        self.walls, self.torches, self.signs, self.floor_tiles = walls, torches, signs, floor_tiles
+        self.walls, self.torches, self.signs, self.doors, self.keys, self.floor_tiles = (
+            walls, torches, signs, doors, keys, floor_tiles
+        )
         self.map_name = file_name
 
     def handle_events(self):
@@ -139,15 +140,31 @@ class GameEngine:
                             self.modal.hide()
                         self.tab_menu.show() if not self.tab_menu.active else self.tab_menu.hide()
 
+                    # INTERACTION KEY [E] (Opens Doors / Reads Signs)
                     elif event.key == pygame.K_e:
                         if self.modal.active:
                             self.modal.hide()
                         else:
                             p_pos = (self.player_rect.centerx, self.player_rect.centery)
-                            for sign in self.signs:
-                                if sign.check_proximity(p_pos):
-                                    self.modal.show(sign.text)
-                                    break
+                            
+                            # 1. Try Doors First
+                            door_opened = False
+                            for door in self.doors:
+                                if door.check_proximity(p_pos):
+                                    if door.try_open(self.player_stats.keys):
+                                        door_opened = True
+                                        break
+                                    else:
+                                        self.modal.show("This door is locked! You need a Key.")
+                                        door_opened = True
+                                        break
+                            
+                            # 2. Try Signs if no door was interacted with
+                            if not door_opened:
+                                for sign in self.signs:
+                                    if sign.check_proximity(p_pos):
+                                        self.modal.show(sign.text)
+                                        break
 
                     elif event.key == pygame.K_ESCAPE:
                         if self.modal.active:
@@ -187,6 +204,16 @@ class GameEngine:
             self.player_stats.update()
 
             if not self.game_won and not self.modal.active and not self.tab_menu.active:
+                # 1. Key Pickup Collision Check
+                for key in self.keys:
+                    if not key.collected and self.player_rect.colliderect(key.rect):
+                        key.collected = True
+                        self.player_stats.add_key(key.key_id)
+
+                # 2. Door Collisions (Closed doors act as physical obstacles)
+                closed_door_rects = [door.rect for door in self.doors if not door.is_open]
+                active_obstacles = self.walls + closed_door_rects
+
                 if not self.sword.is_dashing:
                     keys = pygame.key.get_pressed()
                     dx = (keys[pygame.K_RIGHT] or keys[pygame.K_d]) - (keys[pygame.K_LEFT] or keys[pygame.K_a])
@@ -197,9 +224,9 @@ class GameEngine:
                         dy *= 0.7071
 
                     speed = self.player_stats.get_speed(self.sword.is_parrying)
-                    self.controller.move_player_exact(self.player_rect, dx * speed, dy * speed, self.walls)
+                    self.controller.move_player_exact(self.player_rect, dx * speed, dy * speed, active_obstacles)
 
-                self.sword.update(self.player_rect, mouse_world, self.controller.move_player_exact, self.walls)
+                self.sword.update(self.player_rect, mouse_world, self.controller.move_player_exact, active_obstacles)
 
                 if self.player_rect.colliderect(self.chest_rect):
                     self.game_won = True
@@ -216,7 +243,10 @@ class GameEngine:
 
             # Render World Surface
             self.world_surface.fill(FLOOR_COLOR)
-            draw_dungeon(self.world_surface, self.walls, self.torches, self.signs, self.floor_tiles)
+            draw_dungeon(
+                self.world_surface, self.walls, self.torches, self.signs, 
+                self.doors, self.keys, self.floor_tiles
+            )
             pygame.draw.rect(self.world_surface, CHEST_COLOR, self.chest_rect, border_radius=4)
             pygame.draw.rect(self.world_surface, PLAYER_COLOR, self.player_rect, border_radius=2)
 
@@ -226,16 +256,28 @@ class GameEngine:
             # Camera Pass using dynamic map dimensions
             self.camera.render(self.screen, self.world_surface, self.map_w, self.map_h)
 
-            # Sign Floating Interaction Prompts
+            # Floating Prompts (Signs and Doors)
             p_pos = (self.player_rect.centerx, self.player_rect.centery)
             if not self.modal.active and not self.tab_menu.active:
-                for sign in self.signs:
-                    if sign.check_proximity(p_pos):
-                        sign.draw_prompt(self.screen, self.small_font, camera_offset=(self.camera.cam_x, self.camera.cam_y), zoom=ZOOM)
+                cam_offset = (self.camera.cam_x, self.camera.cam_y)
+                
+                # Check Door Prompt
+                prompt_drawn = False
+                for door in self.doors:
+                    if door.check_proximity(p_pos):
+                        door.draw_prompt(self.screen, self.small_font, camera_offset=cam_offset, zoom=ZOOM)
+                        prompt_drawn = True
                         break
+                
+                # Check Sign Prompt
+                if not prompt_drawn:
+                    for sign in self.signs:
+                        if sign.check_proximity(p_pos):
+                            sign.draw_prompt(self.screen, self.small_font, camera_offset=cam_offset, zoom=ZOOM)
+                            break
 
             # HUD & Menus
-            info_text = self.font.render(f"Map: {self.map_name} | [TAB] Pause Menu | [E] Read Sign", True, TEXT_COLOR)
+            info_text = self.font.render(f"Map: {self.map_name} | [TAB] Pause Menu | [E] Interact", True, TEXT_COLOR)
             self.screen.blit(info_text, (20, 15))
 
             self.player_stats.draw_hud(self.screen, self.font)
@@ -253,7 +295,7 @@ class GameEngine:
                 win_text = self.font.render("TREASURE LOCATED! Press 'R' for Next Map", True, CHEST_COLOR)
                 self.screen.blit(win_text, (SCREEN_WIDTH // 2 - win_text.get_width() // 2, SCREEN_HEIGHT // 2 - 20))
 
-        # Render custom cursor on top of everything
+        # Render custom cursor on top
         self.custom_cursor.draw(self.screen)
         pygame.display.flip()
         self.clock.tick(60)

@@ -1,6 +1,7 @@
 import os
 import json
 import copy
+import math
 import pygame
 
 from assets.torch import TorchTile
@@ -26,6 +27,14 @@ font = pygame.font.SysFont("Arial", 11, bold=True)
 small_font = pygame.font.SysFont("Arial", 10)
 title_font = pygame.font.SysFont("Arial", 18, bold=True)
 
+# 5 Color Tiers for Doors and Keys
+KEY_TIERS = [
+    {"name": "Locked Door Gray",   "color": (160, 160, 170), "door": "L0", "key": "K0"},
+    {"name": "Locked Door Green",  "color": (45, 205, 85),   "door": "L1", "key": "K1"},
+    {"name": "Locked Door Blue",   "color": (40, 180, 255),  "door": "L2", "key": "K2"},
+    {"name": "Locked Door Red",    "color": (230, 60, 60),   "door": "L3", "key": "K3"},
+    {"name": "Locked Door Yellow", "color": (255, 215, 0),   "door": "L4", "key": "K4"},
+]
 
 # --- TEXTURE PREVIEWS ---
 def create_sidebar_previews():
@@ -48,27 +57,35 @@ def create_sidebar_previews():
     pygame.draw.circle(torch_preview, (255, 130, 20), (10, 10), 5)
     pygame.draw.circle(torch_preview, (255, 230, 100), (10, 10), 2)
 
+    door_preview = pygame.Surface((20, 20))
+    door_preview.fill((140, 85, 35))
+    pygame.draw.rect(door_preview, (50, 30, 10), (0, 0, 20, 20), 1)
+
     return {
         '#': wall_preview,
         '.': floor_preview,
         'S': sign_preview,
-        '1': torch_preview
+        '1': torch_preview,
+        'D': door_preview
     }
 
 PREVIEWS = create_sidebar_previews()
 
-# --- TAB DEFINITIONS ---
+# --- REORGANIZED TAB DEFINITIONS ---
 OBJECT_ITEMS = [
     "-- Main",
     {'char': '#', 'name': 'Wall',        'symbol': '[#]', 'color': (42, 38, 54)},
     {'char': '.', 'name': 'Floor',       'symbol': '[.]', 'color': (20, 17, 26)},
-    "-- Doors & Keys",
-    {'char': 'D', 'name': 'Door',        'symbol': '[D]', 'color': (140, 85, 35)},
-    {'char': 'L', 'name': 'Locked Door', 'symbol': '[L]', 'color': (200, 140, 30)},
-    {'char': 'K', 'name': 'Key',         'symbol': '[K]', 'color': (255, 215, 0)},
     "-- Assets",
+    {'char': 'D', 'name': 'Door (Open)', 'symbol': '[D]', 'color': (140, 85, 35)},
     {'char': 'S', 'name': 'Sign',        'symbol': '[S]', 'color': (180, 110, 40)},
     {'char': '1', 'name': 'Torch',       'symbol': '[1]', 'color': (255, 140, 20)},
+    "-- Conditional Assets",
+    {'char': 'L0', 'name': 'Locked Door Gray',   'symbol': '[L0]', 'color': (160, 160, 170), 'tier': 0},
+    {'char': 'L1', 'name': 'Locked Door Green',  'symbol': '[L1]', 'color': (45, 205, 85),   'tier': 1},
+    {'char': 'L2', 'name': 'Locked Door Blue',   'symbol': '[L2]', 'color': (40, 180, 255),  'tier': 2},
+    {'char': 'L3', 'name': 'Locked Door Red',    'symbol': '[L3]', 'color': (230, 60, 60),   'tier': 3},
+    {'char': 'L4', 'name': 'Locked Door Yellow', 'symbol': '[L4]', 'color': (255, 215, 0),   'tier': 4},
 ]
 
 CONFIG_ITEMS = [
@@ -78,7 +95,7 @@ CONFIG_ITEMS = [
 
 # --- STATE VARIABLES ---
 app_state = "START_MENU"
-sidebar_tab = "OBJECTS"  # "OBJECTS", "CONFIGS", "TOOLS", "TEMPLATES"
+sidebar_tab = "OBJECTS"
 
 grid_cols = DEFAULT_COLS
 grid_rows = DEFAULT_ROWS
@@ -87,6 +104,10 @@ sign_texts = {}
 map_filename = "map_01"
 selected_tool = '#'
 pen_size = 1
+
+selected_door_coord = None  # Selected (r, c) door to highlight matching key
+required_key_to_place = None  # Token when forced to place matching key
+forced_key_tier = 0
 
 text_input_val = "map_01"
 editing_sign_coord = None
@@ -115,7 +136,6 @@ MAX_HISTORY = 30
 
 
 def save_state():
-    """Pushes a snapshot of current grid and signs to the undo stack."""
     global undo_stack, redo_stack
     state = {
         'grid': copy.deepcopy(grid),
@@ -252,18 +272,27 @@ def clear_canvas():
 
 
 def enforce_single_unique_tile(tool):
-    """Ensures there can only ever be ONE 'P' or ONE 'X' on the map."""
-    if tool in ['P', 'X']:
+    """Ensures there can only ever be ONE 'P' or ONE 'X' or ONE color Door/Key."""
+    if tool in ['P', 'X'] or tool.startswith('L') or tool.startswith('K'):
         for r in range(grid_rows):
             for c in range(grid_cols):
                 if grid[r][c] == tool:
                     grid[r][c] = '.'
 
 
+def tile_exists_on_map(token):
+    """Checks if a specific tile token exists on the canvas."""
+    for row in grid:
+        if token in row:
+            return True
+    return False
+
+
 def paint_brush(center_r, center_c, tool):
-    # If placing P or X, remove existing ones first
-    if tool in ['P', 'X']:
-        enforce_single_unique_tile(tool)
+    global required_key_to_place, forced_key_tier, app_state
+
+    # Remove existing P, X, or color door/key if replacing
+    enforce_single_unique_tile(tool)
 
     half = pen_size // 2
     for dr in range(-half, half + 1 if pen_size % 2 != 0 else half):
@@ -272,12 +301,21 @@ def paint_brush(center_r, center_c, tool):
             if 0 <= r < grid_rows and 0 <= c < grid_cols:
                 grid[r][c] = tool
                 if tool == 'S':
-                    global editing_sign_coord, text_input_val, app_state
+                    global editing_sign_coord, text_input_val
                     editing_sign_coord = f"{r},{c}"
                     text_input_val = sign_texts.get(editing_sign_coord, "")
                     app_state = "SIGN_TEXT_MODAL"
                 elif tool == '.':
                     sign_texts.pop(f"{r},{c}", None)
+
+    # If placing a locked door (L0–L4), immediately require placing its key (K0–K4)
+    if tool.startswith('L'):
+        tier_idx = int(tool[1:])
+        required_key_to_place = KEY_TIERS[tier_idx]["key"]
+        forced_key_tier = tier_idx
+        # Clear existing key for this tier if any
+        enforce_single_unique_tile(required_key_to_place)
+        app_state = "PLACE_KEY_REQUIRED"
 
 
 def stamp_template(start_r, start_c, template):
@@ -293,9 +331,7 @@ def stamp_template(start_r, start_c, template):
             target_c = start_c + c
             if 0 <= target_r < grid_rows and 0 <= target_c < grid_cols:
                 char = temp_grid[r][c]
-                if char in ['P', 'X']:
-                    enforce_single_unique_tile(char)
-
+                enforce_single_unique_tile(char)
                 grid[target_r][target_c] = char
                 
                 coord_key = f"{r},{c}"
@@ -311,7 +347,7 @@ def load_map_from_file(filename):
 
     if os.path.exists(filepath):
         with open(filepath, "r") as f:
-            lines = [line.strip() for line in f.readlines() if line.strip()]
+            lines = [line.strip().split() if ' ' in line.strip() else list(line.strip()) for line in f.readlines() if line.strip()]
 
         loaded_rows = len(lines)
         loaded_cols = max(len(l) for l in lines) if loaded_rows > 0 else DEFAULT_COLS
@@ -343,9 +379,8 @@ def load_map_from_file(filename):
 def save_map_to_file():
     global save_error_msg, app_state
 
-    # Validate presence of 1 Player Spawn and 1 Exit
-    has_player = any('P' in row for row in grid)
-    has_exit = any('X' in row for row in grid)
+    has_player = any('P' in cell for row in grid for cell in row)
+    has_exit = any('X' in cell for row in grid for cell in row)
 
     if not has_player or not has_exit:
         missing = []
@@ -363,7 +398,7 @@ def save_map_to_file():
 
     with open(txt_path, "w") as f:
         for row in grid:
-            f.write("".join(row) + "\n")
+            f.write(" ".join(row) + "\n")
 
     with open(json_path, "w") as jf:
         json.dump(sign_texts, jf, indent=2)
@@ -382,7 +417,6 @@ while running:
     base_tile_size = min(avail_w / grid_cols, avail_h / grid_rows)
     current_tile_size = base_tile_size * zoom_level
 
-    # Cursor blink timer calculation
     show_cursor = (pygame.time.get_ticks() // 500) % 2 == 0
 
     for event in pygame.event.get():
@@ -468,39 +502,56 @@ while running:
                 elif len(text_input_val) < 80 and event.unicode.isprintable():
                     text_input_val += event.unicode
 
-        # --- 5. SAVE TEMPLATE NAME MODAL STATE ---
-        elif app_state == "SAVE_TEMPLATE_NAME_MODAL":
-            if event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_RETURN:
-                    if template_name_input.strip() and template_select_start and template_select_end:
-                        r1, r2 = sorted([template_select_start[0], template_select_end[0]])
-                        c1, c2 = sorted([template_select_start[1], template_select_end[1]])
+        # --- 5. FORCED KEY PLACEMENT STATE (Pan/Zoom Enabled!) ---
+        elif app_state == "PLACE_KEY_REQUIRED":
+            keys = pygame.key.get_pressed()
 
-                        temp_grid = []
-                        temp_signs = {}
+            # Mouse wheel zooming supported during key placement
+            if event.type == pygame.MOUSEWHEEL and mouse_x < sidebar_x:
+                zoom_factor = 1.15 if event.y > 0 else 0.85
+                old_zoom = zoom_level
+                zoom_level = max(0.5, min(6.0, zoom_level * zoom_factor))
+                if old_zoom != zoom_level:
+                    pan_offset_x = mouse_x - (mouse_x - pan_offset_x) * (zoom_level / old_zoom)
+                    pan_offset_y = mouse_y - (mouse_y - pan_offset_y) * (zoom_level / old_zoom)
 
-                        for r_idx, r in enumerate(range(r1, r2 + 1)):
-                            row_chars = []
-                            for c_idx, c in enumerate(range(c1, c2 + 1)):
-                                row_chars.append(grid[r][c])
-                                if f"{r},{c}" in sign_texts:
-                                    temp_signs[f"{r_idx},{c_idx}"] = sign_texts[f"{r},{c}"]
-                            temp_grid.append(row_chars)
+            elif event.type == pygame.MOUSEBUTTONDOWN:
+                if event.button == 2 or (event.button == 1 and keys[pygame.K_SPACE] and mouse_x < sidebar_x):
+                    is_panning = True
+                    pan_start_pos = (mouse_x, mouse_y)
+                elif event.button == 1 and mouse_x < sidebar_x and not keys[pygame.K_SPACE]:
+                    rel_x = mouse_x - pan_offset_x
+                    rel_y = mouse_y - pan_offset_y
+                    c = int(rel_x // current_tile_size)
+                    r = int(rel_y // current_tile_size)
 
-                        save_template_to_disk(template_name_input.strip(), temp_grid, temp_signs)
-                        is_creating_template = False
-                        template_select_start = None
-                        template_select_end = None
+                    if 0 <= r < grid_rows and 0 <= c < grid_cols:
+                        save_state()
+                        grid[r][c] = required_key_to_place
+                        required_key_to_place = None
                         app_state = "EDITOR"
 
-                elif event.key == pygame.K_BACKSPACE:
-                    template_name_input = template_name_input[:-1]
-                elif event.key == pygame.K_ESCAPE:
-                    app_state = "EDITOR"
-                elif len(template_name_input) < 20 and event.unicode.isprintable():
-                    template_name_input += event.unicode
+            elif event.type == pygame.MOUSEBUTTONUP and (event.button == 2 or event.button == 1):
+                is_panning = False
 
-        # --- 6. CLEAR CANVAS CONFIRMATION MODAL STATE ---
+            elif event.type == pygame.MOUSEMOTION and is_panning:
+                dx = mouse_x - pan_start_pos[0]
+                dy = mouse_y - pan_start_pos[1]
+                pan_offset_x += dx
+                pan_offset_y += dy
+                pan_start_pos = (mouse_x, mouse_y)
+
+        # --- 6. SAVE ERROR MODAL STATE ---
+        elif app_state == "SAVE_ERROR_MODAL":
+            box_w, box_h = 420, 130
+            modal_box = pygame.Rect(SCREEN_WIDTH // 2 - box_w // 2, SCREEN_HEIGHT // 2 - box_h // 2, box_w, box_h)
+            btn_ok = pygame.Rect(modal_box.centerx - 50, modal_box.y + 80, 100, 30)
+
+            if (event.type == pygame.MOUSEBUTTONDOWN and event.button == 1 and btn_ok.collidepoint(mouse_x, mouse_y)) or \
+               (event.type == pygame.KEYDOWN and event.key in [pygame.K_RETURN, pygame.K_ESCAPE]):
+                app_state = "EDITOR"
+
+        # --- 7. CLEAR CANVAS CONFIRMATION MODAL STATE ---
         elif app_state == "CLEAR_CANVAS_CONFIRM":
             box_w, box_h = 360, 130
             modal_box = pygame.Rect(SCREEN_WIDTH // 2 - box_w // 2, SCREEN_HEIGHT // 2 - box_h // 2, box_w, box_h)
@@ -514,16 +565,6 @@ while running:
                 elif btn_no.collidepoint(mouse_x, mouse_y):
                     app_state = "EDITOR"
             elif event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
-                app_state = "EDITOR"
-
-        # --- 7. SAVE ERROR MODAL STATE ---
-        elif app_state == "SAVE_ERROR_MODAL":
-            box_w, box_h = 420, 130
-            modal_box = pygame.Rect(SCREEN_WIDTH // 2 - box_w // 2, SCREEN_HEIGHT // 2 - box_h // 2, box_w, box_h)
-            btn_ok = pygame.Rect(modal_box.centerx - 50, modal_box.y + 80, 100, 30)
-
-            if (event.type == pygame.MOUSEBUTTONDOWN and event.button == 1 and btn_ok.collidepoint(mouse_x, mouse_y)) or \
-               (event.type == pygame.KEYDOWN and event.key in [pygame.K_RETURN, pygame.K_ESCAPE]):
                 app_state = "EDITOR"
 
         # --- 8. EDITOR STATE ---
@@ -541,7 +582,6 @@ while running:
                     pan_offset_y = mouse_y - (mouse_y - pan_offset_y) * (zoom_level / old_zoom)
 
             elif event.type == pygame.KEYDOWN:
-                # Ctrl+Z (Undo) and Ctrl+Y / Ctrl+Shift+Z (Redo)
                 if event.key == pygame.K_z and (keys[pygame.K_LCTRL] or keys[pygame.K_RCTRL]):
                     if keys[pygame.K_LSHIFT] or keys[pygame.K_RSHIFT]:
                         redo()
@@ -554,6 +594,7 @@ while running:
                 elif event.key == pygame.K_ESCAPE:
                     selected_template = None
                     is_creating_template = False
+                    selected_door_coord = None
 
             elif event.type == pygame.MOUSEBUTTONDOWN:
                 if event.button == 2 or (event.button == 1 and keys[pygame.K_SPACE] and mouse_x < sidebar_x):
@@ -582,10 +623,16 @@ while running:
                                 if isinstance(item, str):
                                     btn_y += 20
                                     continue
+                                
+                                char = item['char']
                                 btn_rect = pygame.Rect(sidebar_x + 12, btn_y, 225, 28)
+                                
                                 if btn_rect.collidepoint(mouse_x, mouse_y):
-                                    selected_tool = item['char']
-                                    selected_template = None
+                                    # Prevent selecting a door tier that already exists on the map
+                                    if not (char.startswith('L') and tile_exists_on_map(char)):
+                                        selected_tool = char
+                                        selected_template = None
+                                
                                 btn_y += 32
 
                         # TAB 2: CONFIGS
@@ -662,7 +709,7 @@ while running:
                         if save_rect.collidepoint(mouse_x, mouse_y):
                             save_map_to_file()
 
-                # SCALED CANVAS PAINTING / TEMPLATE STAMPING
+                # SCALED CANVAS PAINTING / DOOR SELECTION
                 elif mouse_x < sidebar_x and not keys[pygame.K_SPACE]:
                     rel_x = mouse_x - pan_offset_x
                     rel_y = mouse_y - pan_offset_y
@@ -670,19 +717,26 @@ while running:
                     r = int(rel_y // current_tile_size)
 
                     if 0 <= r < grid_rows and 0 <= c < grid_cols:
-                        if is_creating_template:
-                            if event.button == 1:
-                                template_select_start = (r, c)
-                                template_select_end = (r, c)
-                        elif selected_template:
-                            if event.button == 1:  # Stamp Template
-                                stamp_template(r, c, selected_template)
-                            elif event.button == 3:
-                                selected_template = None
+                        clicked_tile = grid[r][c]
+                        
+                        # Click on a placed locked door to select and highlight its key
+                        if event.button == 1 and clicked_tile.startswith('L') and not selected_template and not is_creating_template:
+                            selected_door_coord = (r, c)
                         else:
-                            if event.button in [1, 3]:
-                                save_state()  # Push state snapshot on stroke start
-                                paint_brush(r, c, selected_tool if event.button == 1 else '.')
+                            selected_door_coord = None
+                            if is_creating_template:
+                                if event.button == 1:
+                                    template_select_start = (r, c)
+                                    template_select_end = (r, c)
+                            elif selected_template:
+                                if event.button == 1:
+                                    stamp_template(r, c, selected_template)
+                                elif event.button == 3:
+                                    selected_template = None
+                            else:
+                                if event.button in [1, 3]:
+                                    save_state()
+                                    paint_brush(r, c, selected_tool if event.button == 1 else '.')
 
             elif event.type == pygame.MOUSEBUTTONUP:
                 if event.button == 2 or event.button == 1:
@@ -717,7 +771,7 @@ while running:
                     r = int(rel_y // current_tile_size)
 
                     if 0 <= r < grid_rows and 0 <= c < grid_cols:
-                        if event.buttons[0] and selected_tool != 'S':
+                        if event.buttons[0] and not selected_tool.startswith('L') and selected_tool != 'S':
                             paint_brush(r, c, selected_tool)
                         elif event.buttons[2]:
                             paint_brush(r, c, '.')
@@ -797,11 +851,11 @@ while running:
         screen.blit(b_txt, b_txt.get_rect(center=back_btn.center))
 
     # 4. EDITOR DISPLAY
-    elif app_state in ["EDITOR", "SIGN_TEXT_MODAL", "SAVE_TEMPLATE_NAME_MODAL", "CLEAR_CANVAS_CONFIRM", "SAVE_ERROR_MODAL"]:
-        # Render Scaled Grid Tiles
+    elif app_state in ["EDITOR", "SIGN_TEXT_MODAL", "SAVE_TEMPLATE_NAME_MODAL", "CLEAR_CANVAS_CONFIRM", "SAVE_ERROR_MODAL", "PLACE_KEY_REQUIRED"]:
+        # Render Grid Tiles
         for r in range(grid_rows):
             for c in range(grid_cols):
-                char = grid[r][c]
+                token = grid[r][c]
                 rx = pan_offset_x + c * current_tile_size
                 ry = pan_offset_y + r * current_tile_size
 
@@ -811,52 +865,70 @@ while running:
                 rect = pygame.Rect(rx, ry, current_tile_size, current_tile_size)
 
                 tile_color = (20, 17, 26)
-                for item in OBJECT_ITEMS + CONFIG_ITEMS:
-                    if isinstance(item, dict) and item['char'] == char:
-                        tile_color = item['color']
-                        break
+                if token == '#': tile_color = (42, 38, 54)
+                elif token == 'D': tile_color = (140, 85, 35)
+                elif token.startswith('L'):
+                    idx = int(token[1:]) if len(token) > 1 and token[1:].isdigit() else 0
+                    tile_color = KEY_TIERS[min(idx, 4)]["color"]
+                elif token.startswith('K'):
+                    idx = int(token[1:]) if len(token) > 1 and token[1:].isdigit() else 0
+                    tile_color = KEY_TIERS[min(idx, 4)]["color"]
+                else:
+                    for item in OBJECT_ITEMS + CONFIG_ITEMS:
+                        if isinstance(item, dict) and item['char'] == token:
+                            tile_color = item['color']
+                            break
 
                 pygame.draw.rect(screen, tile_color, rect)
                 pygame.draw.rect(screen, (30, 28, 38), rect, 1)
 
-                if char in ['S', 'P', 'X', '1'] and current_tile_size >= 10:
-                    txt = small_font.render(char, True, (255, 255, 255))
-                    screen.blit(txt, txt.get_rect(center=rect.center))
+                # Render Tile Symbols
+                if current_tile_size >= 10:
+                    lbl_str = token
+                    if token.startswith('L'): lbl_str = "L"
+                    elif token.startswith('K'): lbl_str = "K"
+                    
+                    if lbl_str in ['S', 'P', 'X', '1', 'D', 'L', 'K']:
+                        txt = small_font.render(lbl_str, True, (255, 255, 255))
+                        screen.blit(txt, txt.get_rect(center=rect.center))
 
-        # --- TEMPLATE SELECTION BOX INDICATOR ---
-        if is_creating_template and template_select_start and template_select_end:
-            r1, r2 = sorted([template_select_start[0], template_select_end[0]])
-            c1, c2 = sorted([template_select_start[1], template_select_end[1]])
+        # --- HIGHLIGHT MATCHING KEY FOR SELECTED DOOR ---
+        if selected_door_coord:
+            dr, dc = selected_door_coord
+            door_token = grid[dr][dc]
+            if door_token.startswith('L'):
+                tier_idx = int(door_token[1:])
+                target_key_token = f"K{tier_idx}"
+                
+                # Find matching key coordinates
+                key_coord = None
+                for kr in range(grid_rows):
+                    for kc in range(grid_cols):
+                        if grid[kr][kc] == target_key_token:
+                            key_coord = (kr, kc)
+                            break
+                    if key_coord: break
 
-            box_x = pan_offset_x + c1 * current_tile_size
-            box_y = pan_offset_y + r1 * current_tile_size
-            box_w = (c2 - c1 + 1) * current_tile_size
-            box_h = (r2 - r1 + 1) * current_tile_size
+                door_px = (pan_offset_x + (dc + 0.5) * current_tile_size, pan_offset_y + (dr + 0.5) * current_tile_size)
+                
+                # Highlight Selected Door
+                d_rect = pygame.Rect(pan_offset_x + dc * current_tile_size, pan_offset_y + dr * current_tile_size, current_tile_size, current_tile_size)
+                pygame.draw.rect(screen, (255, 255, 255), d_rect, 2)
 
-            sel_rect = pygame.Rect(box_x, box_y, box_w, box_h)
-            pygame.draw.rect(screen, (80, 220, 255), sel_rect, 2)
+                if key_coord:
+                    kr, kc = key_coord
+                    key_px = (pan_offset_x + (kc + 0.5) * current_tile_size, pan_offset_y + (kr + 0.5) * current_tile_size)
+                    
+                    # Pulsing Highlight Box around Key
+                    pulse = int(abs(math.sin(pygame.time.get_ticks() * 0.005)) * 100) + 155
+                    k_rect = pygame.Rect(pan_offset_x + kc * current_tile_size, pan_offset_y + kr * current_tile_size, current_tile_size, current_tile_size)
+                    pygame.draw.rect(screen, (255, 215, pulse), k_rect, 3)
 
-        # --- TEMPLATE STAMP STENCIL PREVIEW ---
-        elif selected_template and mouse_x < sidebar_x:
-            rel_x = mouse_x - pan_offset_x
-            rel_y = mouse_y - pan_offset_y
-            cur_c = int(rel_x // current_tile_size)
-            cur_r = int(rel_y // current_tile_size)
+                    # Connector Line with Dashed Effect
+                    pygame.draw.line(screen, (255, 215, 0), door_px, key_px, 2)
 
-            temp_grid = selected_template["grid"]
-            t_rows = len(temp_grid)
-            t_cols = len(temp_grid[0]) if t_rows > 0 else 0
-
-            stencil_rect = pygame.Rect(
-                pan_offset_x + cur_c * current_tile_size,
-                pan_offset_y + cur_r * current_tile_size,
-                t_cols * current_tile_size,
-                t_rows * current_tile_size
-            )
-            pygame.draw.rect(screen, (255, 220, 80), stencil_rect, 2)
-
-        # --- CURSOR PEN SIZE PREVIEW INDICATOR ---
-        elif mouse_x < sidebar_x and not is_creating_template:
+        # Render Cursor Pen Indicator
+        if mouse_x < sidebar_x and app_state == "EDITOR" and not is_creating_template:
             rel_x = mouse_x - pan_offset_x
             rel_y = mouse_y - pan_offset_y
             cur_c = int(rel_x // current_tile_size)
@@ -883,7 +955,7 @@ while running:
         title_surf = font.render(f"MAP: {map_filename}", True, (240, 190, 40))
         screen.blit(title_surf, (sidebar_x + 12, 12))
 
-        # TAB SELECTION HEADERS (4 Tabs)
+        # TAB SELECTION HEADERS
         tab_w = 54
         t1 = pygame.Rect(sidebar_x + 8, 40, tab_w, 24)
         t2 = pygame.Rect(sidebar_x + 66, 40, tab_w, 24)
@@ -897,7 +969,7 @@ while running:
             t_lbl = small_font.render(name, True, (255, 255, 255) if is_active else (160, 160, 180))
             screen.blit(t_lbl, t_lbl.get_rect(center=rect.center))
 
-        # --- TAB CONTENT: OBJECTS ---
+        # TAB CONTENT: OBJECTS
         if sidebar_tab == "OBJECTS":
             btn_y = 80
             for item in OBJECT_ITEMS:
@@ -909,23 +981,40 @@ while running:
 
                 char = item['char']
                 is_selected = (selected_tool == char and not selected_template)
+                already_on_map = char.startswith('L') and tile_exists_on_map(char)
+                
                 btn_rect = pygame.Rect(sidebar_x + 12, btn_y, 225, 28)
 
-                pygame.draw.rect(screen, (35, 30, 45) if not is_selected else (55, 50, 75), btn_rect, border_radius=4)
-                pygame.draw.rect(screen, (255, 200, 50) if is_selected else (60, 55, 75), btn_rect, 2 if is_selected else 1, border_radius=4)
+                # Dimmed styling if the locked door color is already placed on canvas
+                bg_color = (25, 20, 30) if already_on_map else ((55, 50, 75) if is_selected else (35, 30, 45))
+                border_color = (50, 45, 60) if already_on_map else ((255, 200, 50) if is_selected else (60, 55, 75))
 
+                pygame.draw.rect(screen, bg_color, btn_rect, border_radius=4)
+                pygame.draw.rect(screen, border_color, btn_rect, 2 if is_selected else 1, border_radius=4)
+
+                # Icon/Color preview
                 if char in PREVIEWS:
                     screen.blit(PREVIEWS[char], (btn_rect.x + 6, btn_rect.y + 4))
+                elif char.startswith('L'):
+                    tier_idx = item['tier']
+                    icon_box = pygame.Rect(btn_rect.x + 6, btn_rect.y + 4, 20, 20)
+                    pygame.draw.rect(screen, KEY_TIERS[tier_idx]["color"], icon_box, border_radius=2)
 
-                name_txt = font.render(item['name'], True, (255, 255, 255) if is_selected else (190, 190, 200))
+                text_color = (100, 100, 110) if already_on_map else ((255, 255, 255) if is_selected else (190, 190, 200))
+                name_txt = font.render(item['name'], True, text_color)
                 screen.blit(name_txt, (btn_rect.x + 34, btn_rect.y + 5))
 
-                sym_txt = font.render(item['symbol'], True, (255, 200, 50) if is_selected else (120, 120, 140))
+                sym_txt = font.render(item['symbol'], True, (120, 120, 140) if not already_on_map else (80, 80, 90))
                 screen.blit(sym_txt, (btn_rect.right - sym_txt.get_width() - 8, btn_rect.y + 5))
+
+                # Placed indicator badge
+                if already_on_map:
+                    check_lbl = small_font.render("✓ ON MAP", True, (120, 180, 120))
+                    screen.blit(check_lbl, (btn_rect.right - check_lbl.get_width() - 8, btn_rect.y + 6))
 
                 btn_y += 32
 
-        # --- TAB CONTENT: CONFIGS ---
+        # TAB CONTENT: CONFIGS
         elif sidebar_tab == "CONFIGS":
             btn_y = 80
             for item in CONFIG_ITEMS:
@@ -975,28 +1064,7 @@ while running:
             screen.blit(font.render("+", True, (255, 255, 255)), (btn_h_inc.x + 7, btn_h_inc.y + 2))
             screen.blit(font.render(str(grid_rows), True, (255, 220, 100)), (sidebar_x + 150, 220))
 
-            pygame.draw.line(screen, (60, 55, 75), (sidebar_x + 12, 260), (SCREEN_WIDTH - 12, 260), 1)
-
-            # Switch Map Dropdown
-            dropdown_rect = pygame.Rect(sidebar_x + 12, 280, 225, 26)
-            pygame.draw.rect(screen, (35, 30, 45), dropdown_rect, border_radius=3)
-            pygame.draw.rect(screen, (100, 90, 120), dropdown_rect, 1, border_radius=3)
-
-            dd_txt = small_font.render(f"Switch File: {map_filename}.txt v", True, (220, 220, 240))
-            screen.blit(dd_txt, (dropdown_rect.x + 8, dropdown_rect.y + 6))
-
-            if dropdown_open:
-                item_y = 308
-                for f_name in get_maps_list():
-                    item_rect = pygame.Rect(sidebar_x + 12, item_y, 225, 22)
-                    pygame.draw.rect(screen, (45, 40, 60), item_rect)
-                    pygame.draw.rect(screen, (80, 70, 100), item_rect, 1)
-
-                    f_txt = small_font.render(f_name, True, (240, 240, 250))
-                    screen.blit(f_txt, (item_rect.x + 8, item_rect.y + 3))
-                    item_y += 24
-
-        # --- TAB CONTENT: TOOLS ---
+        # TAB CONTENT: TOOLS
         elif sidebar_tab == "TOOLS":
             p_hdr = font.render("PEN BRUSH SIZE:", True, (240, 190, 40))
             screen.blit(p_hdr, (sidebar_x + 12, 80))
@@ -1014,51 +1082,20 @@ while running:
 
             pygame.draw.line(screen, (60, 55, 75), (sidebar_x + 12, 155), (SCREEN_WIDTH - 12, 155), 1)
 
-            # Auto Border Wall Button
             border_btn = pygame.Rect(sidebar_x + 12, 175, 225, 32)
             pygame.draw.rect(screen, (65, 55, 85), border_btn, border_radius=4)
             pygame.draw.rect(screen, (140, 120, 170), border_btn, 1, border_radius=4)
             b_lbl = font.render("AUTO BORDER WALL", True, (240, 230, 255))
             screen.blit(b_lbl, b_lbl.get_rect(center=border_btn.center))
 
-            # Clear Canvas Button
             clear_btn = pygame.Rect(sidebar_x + 12, 220, 225, 32)
             pygame.draw.rect(screen, (180, 50, 50), clear_btn, border_radius=4)
             pygame.draw.rect(screen, (220, 80, 80), clear_btn, 1, border_radius=4)
             c_lbl = font.render("CLEAR CANVAS", True, (255, 255, 255))
             screen.blit(c_lbl, c_lbl.get_rect(center=clear_btn.center))
 
-            # Undo / Redo Legend
             legend_txt = small_font.render("[Ctrl+Z] Undo  |  [Ctrl+Y] Redo", True, (140, 140, 160))
             screen.blit(legend_txt, (sidebar_x + 12, 270))
-
-        # --- TAB CONTENT: TEMPLATES ---
-        elif sidebar_tab == "TEMPLATES":
-            create_btn = pygame.Rect(sidebar_x + 12, 80, 225, 30)
-            pygame.draw.rect(screen, (45, 160, 180) if not is_creating_template else (220, 180, 40), create_btn, border_radius=4)
-            c_lbl = font.render("+ CREATE TEMPLATE" if not is_creating_template else "DRAG CANVAS AREA...", True, (10, 10, 10))
-            screen.blit(c_lbl, c_lbl.get_rect(center=create_btn.center))
-
-            t_hdr = small_font.render("PREMADE TEMPLATES:", True, (240, 190, 40))
-            screen.blit(t_hdr, (sidebar_x + 12, 122))
-
-            t_y = 140
-            templates_list = get_templates_list()
-            if not templates_list:
-                no_t = small_font.render("No templates saved yet.", True, (140, 140, 160))
-                screen.blit(no_t, (sidebar_x + 12, t_y))
-            else:
-                for temp_file in templates_list:
-                    temp_name = os.path.splitext(temp_file)[0]
-                    is_t_sel = (selected_template and active_template_name == temp_name)
-                    item_rect = pygame.Rect(sidebar_x + 12, t_y, 225, 26)
-
-                    pygame.draw.rect(screen, (55, 50, 75) if is_t_sel else (35, 30, 45), item_rect, border_radius=3)
-                    pygame.draw.rect(screen, (255, 200, 50) if is_t_sel else (60, 55, 75), item_rect, 1, border_radius=3)
-
-                    t_txt = font.render(temp_name, True, (255, 255, 255) if is_t_sel else (200, 200, 220))
-                    screen.blit(t_txt, (item_rect.x + 8, item_rect.y + 5))
-                    t_y += 30
 
         # Save Button
         save_rect = pygame.Rect(sidebar_x + 12, SCREEN_HEIGHT - 45, 225, 32)
@@ -1066,8 +1103,20 @@ while running:
         save_txt = font.render("SAVE MAP", True, (10, 20, 10))
         screen.blit(save_txt, save_txt.get_rect(center=save_rect.center))
 
-        # In-Game Sign Text Modal
-        if app_state == "SIGN_TEXT_MODAL":
+        # Forced Key Placement Prompt Banner
+        if app_state == "PLACE_KEY_REQUIRED":
+            color_name = KEY_TIERS[forced_key_tier]["name"].replace("Locked Door ", "")
+            tier_color = KEY_TIERS[forced_key_tier]["color"]
+
+            prompt_box = pygame.Rect(SCREEN_WIDTH // 2 - 220, 15, 440, 42)
+            pygame.draw.rect(screen, (22, 18, 28), prompt_box, border_radius=6)
+            pygame.draw.rect(screen, tier_color, prompt_box, 2, border_radius=6)
+
+            p_txt = font.render(f"CLICK CANVAS TO PLACE MATCHING {color_name.upper()} KEY!", True, tier_color)
+            screen.blit(p_txt, p_txt.get_rect(center=prompt_box.center))
+
+        # Save Error Modal
+        elif app_state == "SAVE_ERROR_MODAL":
             overlay = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
             overlay.fill((0, 0, 0, 180))
             screen.blit(overlay, (0, 0))
@@ -1075,52 +1124,15 @@ while running:
             box_w, box_h = 420, 130
             modal_box = pygame.Rect(SCREEN_WIDTH // 2 - box_w // 2, SCREEN_HEIGHT // 2 - box_h // 2, box_w, box_h)
             pygame.draw.rect(screen, (22, 18, 28), modal_box, border_radius=6)
-            pygame.draw.rect(screen, (240, 190, 40), modal_box, 2, border_radius=6)
+            pygame.draw.rect(screen, (220, 80, 80), modal_box, 2, border_radius=6)
 
-            m_title = font.render(f"EDIT SIGN MESSAGE ({editing_sign_coord}):", True, (240, 190, 40))
-            screen.blit(m_title, (modal_box.x + 16, modal_box.y + 16))
+            err_txt = font.render(save_error_msg or "Cannot Save Map!", True, (255, 120, 120))
+            screen.blit(err_txt, err_txt.get_rect(center=(modal_box.centerx, modal_box.y + 40)))
 
-            t_box = pygame.Rect(modal_box.x + 16, modal_box.y + 45, box_w - 32, 32)
-            pygame.draw.rect(screen, (12, 10, 16), t_box, border_radius=3)
-            pygame.draw.rect(screen, (100, 90, 120), t_box, 1, border_radius=3)
-
-            in_txt = font.render(text_input_val, True, (255, 255, 255))
-            screen.blit(in_txt, (t_box.x + 8, t_box.y + 9))
-
-            if show_cursor:
-                cursor_x = t_box.x + 8 + in_txt.get_width() + 2
-                pygame.draw.line(screen, (240, 190, 40), (cursor_x, t_box.y + 6), (cursor_x, t_box.y + 24), 2)
-
-            h_txt = small_font.render("Press [ENTER] to Save | [ESC] Cancel", True, (150, 145, 165))
-            screen.blit(h_txt, (modal_box.x + 16, modal_box.y + 92))
-
-        # Save Template Name Modal
-        elif app_state == "SAVE_TEMPLATE_NAME_MODAL":
-            overlay = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
-            overlay.fill((0, 0, 0, 180))
-            screen.blit(overlay, (0, 0))
-
-            box_w, box_h = 420, 130
-            modal_box = pygame.Rect(SCREEN_WIDTH // 2 - box_w // 2, SCREEN_HEIGHT // 2 - box_h // 2, box_w, box_h)
-            pygame.draw.rect(screen, (22, 18, 28), modal_box, border_radius=6)
-            pygame.draw.rect(screen, (80, 220, 255), modal_box, 2, border_radius=6)
-
-            m_title = font.render("ENTER TEMPLATE NAME:", True, (80, 220, 255))
-            screen.blit(m_title, (modal_box.x + 16, modal_box.y + 16))
-
-            t_box = pygame.Rect(modal_box.x + 16, modal_box.y + 45, box_w - 32, 32)
-            pygame.draw.rect(screen, (12, 10, 16), t_box, border_radius=3)
-            pygame.draw.rect(screen, (100, 90, 120), t_box, 1, border_radius=3)
-
-            in_txt = font.render(template_name_input, True, (255, 255, 255))
-            screen.blit(in_txt, (t_box.x + 8, t_box.y + 9))
-
-            if show_cursor:
-                cursor_x = t_box.x + 8 + in_txt.get_width() + 2
-                pygame.draw.line(screen, (80, 220, 255), (cursor_x, t_box.y + 6), (cursor_x, t_box.y + 24), 2)
-
-            h_txt = small_font.render("Press [ENTER] to Save Template | [ESC] Cancel", True, (150, 145, 165))
-            screen.blit(h_txt, (modal_box.x + 16, modal_box.y + 92))
+            btn_ok = pygame.Rect(modal_box.centerx - 50, modal_box.y + 80, 100, 30)
+            pygame.draw.rect(screen, (60, 55, 75), btn_ok, border_radius=4)
+            ok_txt = font.render("OK", True, (255, 255, 255))
+            screen.blit(ok_txt, ok_txt.get_rect(center=btn_ok.center))
 
         # Clear Canvas Confirmation Modal
         elif app_state == "CLEAR_CANVAS_CONFIRM":
@@ -1147,25 +1159,6 @@ while running:
 
             screen.blit(y_txt, y_txt.get_rect(center=btn_yes.center))
             screen.blit(n_txt, n_txt.get_rect(center=btn_no.center))
-
-        # Save Error Modal
-        elif app_state == "SAVE_ERROR_MODAL":
-            overlay = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
-            overlay.fill((0, 0, 0, 180))
-            screen.blit(overlay, (0, 0))
-
-            box_w, box_h = 420, 130
-            modal_box = pygame.Rect(SCREEN_WIDTH // 2 - box_w // 2, SCREEN_HEIGHT // 2 - box_h // 2, box_w, box_h)
-            pygame.draw.rect(screen, (22, 18, 28), modal_box, border_radius=6)
-            pygame.draw.rect(screen, (220, 80, 80), modal_box, 2, border_radius=6)
-
-            err_txt = font.render(save_error_msg or "Cannot Save Map!", True, (255, 120, 120))
-            screen.blit(err_txt, err_txt.get_rect(center=(modal_box.centerx, modal_box.y + 40)))
-
-            btn_ok = pygame.Rect(modal_box.centerx - 50, modal_box.y + 80, 100, 30)
-            pygame.draw.rect(screen, (60, 55, 75), btn_ok, border_radius=4)
-            ok_txt = font.render("OK", True, (255, 255, 255))
-            screen.blit(ok_txt, ok_txt.get_rect(center=btn_ok.center))
 
     pygame.display.flip()
     clock.tick(60)
