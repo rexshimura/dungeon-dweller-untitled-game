@@ -28,7 +28,8 @@ pos_y = 0.0
 
 def reset_game():
     global pos_x, pos_y
-    walls, torches, player_start, exit_start, file_name = load_random_map("maps")
+    # Unpack 6 values returned by map_loader including floor_tiles
+    walls, torches, floor_tiles, player_start, exit_start, file_name = load_random_map("maps")
 
     player_size = 12
     offset = (TILE_SIZE - player_size) // 2
@@ -45,12 +46,12 @@ def reset_game():
     exit_y = exit_start[1] * TILE_SIZE + 6
     chest_rect = pygame.Rect(exit_x, exit_y, 28, 28)
 
-    return walls, torches, player_rect, chest_rect, file_name
+    return walls, torches, floor_tiles, player_rect, chest_rect, file_name
 
-walls, torches, player_rect, chest_rect, map_name = reset_game()
+walls, torches, floor_tiles, player_rect, chest_rect, map_name = reset_game()
 sword = Sword()
 player_stats = PlayerStats()
-fog = FogOfWar(vision_radius=260)
+fog = FogOfWar(vision_radius=180)
 
 font = pygame.font.SysFont("Arial", 20)
 small_font = pygame.font.SysFont("Arial", 14)
@@ -114,7 +115,7 @@ while running:
 
         elif event.type == pygame.KEYDOWN:
             if event.key == pygame.K_r:
-                walls, torches, player_rect, chest_rect, map_name = reset_game()
+                walls, torches, floor_tiles, player_rect, chest_rect, map_name = reset_game()
                 sword = Sword()
                 player_stats = PlayerStats()
                 game_won = False
@@ -143,9 +144,9 @@ while running:
         if player_rect.colliderect(chest_rect):
             game_won = True
 
-    # 2. RENDER WORLD & TORCHES TO LEVEL SURFACE
+    # 2. RENDER WORLD, FLOOR TILES, & TORCHES TO LEVEL SURFACE
     world_surface.fill(FLOOR_COLOR)
-    draw_dungeon(world_surface, walls, torches)
+    draw_dungeon(world_surface, walls, torches, floor_tiles)
     pygame.draw.rect(world_surface, CHEST_COLOR, chest_rect, border_radius=4)
     pygame.draw.rect(world_surface, PLAYER_COLOR, player_rect, border_radius=2)
     
