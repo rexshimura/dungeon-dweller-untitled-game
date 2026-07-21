@@ -77,7 +77,7 @@ WALL_TEXTURE = _generate_wall_texture()
 
 def detect_attachment(lines, r, c):
     rows = len(lines)
-    cols = len(lines[0])
+    cols = len(lines[0]) if rows > 0 else 0
 
     if c + 1 < cols and lines[r][c + 1] == '#':
         return 'LEFT'
@@ -122,6 +122,9 @@ def load_random_map(maps_folder="maps"):
     with open(filepath, "r") as f:
         lines = [line.strip() for line in f.readlines() if line.strip()]
 
+    rows = len(lines)
+    cols = max(len(line) for line in lines) if rows > 0 else 0
+
     random.seed(filepath)
 
     for r, line in enumerate(lines):
@@ -148,7 +151,21 @@ def load_random_map(maps_folder="maps"):
 
     random.seed()
 
-    return walls, torches, signs, floor_tiles, player_start, exit_start, chosen_file
+    # Calculate exact map dimensions in pixels
+    map_width_px = cols * TILE_SIZE
+    map_height_px = rows * TILE_SIZE
+
+    return (
+        walls, 
+        torches, 
+        signs, 
+        floor_tiles, 
+        player_start, 
+        exit_start, 
+        chosen_file, 
+        map_width_px, 
+        map_height_px
+    )
 
 
 def draw_dungeon(surface, walls, torches, signs=[], floor_tiles=[]):

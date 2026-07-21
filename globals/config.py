@@ -1,0 +1,13 @@
+import pygame
+
+# Screen & Camera Settings
+SCREEN_WIDTH, SCREEN_HEIGHT = 1024, 768
+ZOOM = 2.8
+MAP_WIDTH, MAP_HEIGHT = 1600, 1200
+
+# Color Palette
+FLOOR_COLOR = (15, 12, 20)
+VOID_COLOR = (8, 6, 10)
+PLAYER_COLOR = (50, 230, 110)
+CHEST_COLOR = (240, 190, 40)
+TEXT_COLOR = (255, 255, 255)

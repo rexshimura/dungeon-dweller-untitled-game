@@ -1,5 +1,6 @@
 import os
 import json
+import copy
 import pygame
 
 from assets.torch import TorchTile
@@ -12,8 +13,8 @@ SCREEN_WIDTH = 1024
 SCREEN_HEIGHT = 768
 SIDEBAR_WIDTH = 250
 
-MIN_DIM = 15
-MAX_DIM = 80
+MIN_DIM = 10
+MAX_DIM = 100
 DEFAULT_COLS = 30
 DEFAULT_ROWS = 20
 
@@ -59,11 +60,15 @@ PREVIEWS = create_sidebar_previews()
 # --- TAB DEFINITIONS ---
 OBJECT_ITEMS = [
     "-- Main",
-    {'char': '#', 'name': 'Wall',   'symbol': '[#]', 'color': (42, 38, 54)},
-    {'char': '.', 'name': 'Floor',  'symbol': '[.]', 'color': (20, 17, 26)},
+    {'char': '#', 'name': 'Wall',        'symbol': '[#]', 'color': (42, 38, 54)},
+    {'char': '.', 'name': 'Floor',       'symbol': '[.]', 'color': (20, 17, 26)},
+    "-- Doors & Keys",
+    {'char': 'D', 'name': 'Door',        'symbol': '[D]', 'color': (140, 85, 35)},
+    {'char': 'L', 'name': 'Locked Door', 'symbol': '[L]', 'color': (200, 140, 30)},
+    {'char': 'K', 'name': 'Key',         'symbol': '[K]', 'color': (255, 215, 0)},
     "-- Assets",
-    {'char': 'S', 'name': 'Sign',   'symbol': '[S]', 'color': (180, 110, 40)},
-    {'char': '1', 'name': 'Torch',  'symbol': '[1]', 'color': (255, 140, 20)},
+    {'char': 'S', 'name': 'Sign',        'symbol': '[S]', 'color': (180, 110, 40)},
+    {'char': '1', 'name': 'Torch',       'symbol': '[1]', 'color': (255, 140, 20)},
 ]
 
 CONFIG_ITEMS = [
@@ -86,9 +91,10 @@ pen_size = 1
 text_input_val = "map_01"
 editing_sign_coord = None
 dropdown_open = False
+save_error_msg = None
 
 # Templates state
-selected_template = None  # Dict with grid layout and sign texts
+selected_template = None
 active_template_name = None
 is_creating_template = False
 template_select_start = None
@@ -101,6 +107,64 @@ pan_offset_x = 0.0
 pan_offset_y = 0.0
 is_panning = False
 pan_start_pos = (0, 0)
+
+# --- UNDO / REDO HISTORY SYSTEM ---
+undo_stack = []
+redo_stack = []
+MAX_HISTORY = 30
+
+
+def save_state():
+    """Pushes a snapshot of current grid and signs to the undo stack."""
+    global undo_stack, redo_stack
+    state = {
+        'grid': copy.deepcopy(grid),
+        'signs': copy.deepcopy(sign_texts),
+        'cols': grid_cols,
+        'rows': grid_rows
+    }
+    undo_stack.append(state)
+    if len(undo_stack) > MAX_HISTORY:
+        undo_stack.pop(0)
+    redo_stack.clear()
+
+
+def undo():
+    global grid, sign_texts, grid_cols, grid_rows, undo_stack, redo_stack
+    if not undo_stack:
+        return
+    current_state = {
+        'grid': copy.deepcopy(grid),
+        'signs': copy.deepcopy(sign_texts),
+        'cols': grid_cols,
+        'rows': grid_rows
+    }
+    redo_stack.append(current_state)
+
+    last_state = undo_stack.pop()
+    grid = last_state['grid']
+    sign_texts = last_state['signs']
+    grid_cols = last_state['cols']
+    grid_rows = last_state['rows']
+
+
+def redo():
+    global grid, sign_texts, grid_cols, grid_rows, undo_stack, redo_stack
+    if not redo_stack:
+        return
+    current_state = {
+        'grid': copy.deepcopy(grid),
+        'signs': copy.deepcopy(sign_texts),
+        'cols': grid_cols,
+        'rows': grid_rows
+    }
+    undo_stack.append(current_state)
+
+    next_state = redo_stack.pop()
+    grid = next_state['grid']
+    sign_texts = next_state['signs']
+    grid_cols = next_state['cols']
+    grid_rows = next_state['rows']
 
 
 def get_maps_list():
@@ -155,6 +219,7 @@ def reset_pan_zoom():
 
 def resize_grid(new_cols, new_rows):
     global grid_cols, grid_rows, grid
+    save_state()
 
     new_cols = max(MIN_DIM, min(MAX_DIM, new_cols))
     new_rows = max(MIN_DIM, min(MAX_DIM, new_rows))
@@ -171,6 +236,7 @@ def resize_grid(new_cols, new_rows):
 
 
 def auto_add_border_walls():
+    save_state()
     for r in range(grid_rows):
         for c in range(grid_cols):
             if r == 0 or r == grid_rows - 1 or c == 0 or c == grid_cols - 1:
@@ -178,7 +244,27 @@ def auto_add_border_walls():
                 sign_texts.pop(f"{r},{c}", None)
 
 
+def clear_canvas():
+    global grid, sign_texts
+    save_state()
+    grid = [['.' for _ in range(grid_cols)] for _ in range(grid_rows)]
+    sign_texts.clear()
+
+
+def enforce_single_unique_tile(tool):
+    """Ensures there can only ever be ONE 'P' or ONE 'X' on the map."""
+    if tool in ['P', 'X']:
+        for r in range(grid_rows):
+            for c in range(grid_cols):
+                if grid[r][c] == tool:
+                    grid[r][c] = '.'
+
+
 def paint_brush(center_r, center_c, tool):
+    # If placing P or X, remove existing ones first
+    if tool in ['P', 'X']:
+        enforce_single_unique_tile(tool)
+
     half = pen_size // 2
     for dr in range(-half, half + 1 if pen_size % 2 != 0 else half):
         for dc in range(-half, half + 1 if pen_size % 2 != 0 else half):
@@ -195,6 +281,7 @@ def paint_brush(center_r, center_c, tool):
 
 
 def stamp_template(start_r, start_c, template):
+    save_state()
     temp_grid = template["grid"]
     temp_signs = template["signs"]
     t_rows = len(temp_grid)
@@ -206,6 +293,9 @@ def stamp_template(start_r, start_c, template):
             target_c = start_c + c
             if 0 <= target_r < grid_rows and 0 <= target_c < grid_cols:
                 char = temp_grid[r][c]
+                if char in ['P', 'X']:
+                    enforce_single_unique_tile(char)
+
                 grid[target_r][target_c] = char
                 
                 coord_key = f"{r},{c}"
@@ -215,6 +305,7 @@ def stamp_template(start_r, start_c, template):
 
 def load_map_from_file(filename):
     global grid_cols, grid_rows, grid, sign_texts, map_filename, app_state
+    global undo_stack, redo_stack
     filepath = os.path.join("maps", filename)
     map_filename = os.path.splitext(filename)[0]
 
@@ -243,11 +334,27 @@ def load_map_from_file(filename):
     else:
         sign_texts = {}
 
+    undo_stack.clear()
+    redo_stack.clear()
     reset_pan_zoom()
     app_state = "EDITOR"
 
 
 def save_map_to_file():
+    global save_error_msg, app_state
+
+    # Validate presence of 1 Player Spawn and 1 Exit
+    has_player = any('P' in row for row in grid)
+    has_exit = any('X' in row for row in grid)
+
+    if not has_player or not has_exit:
+        missing = []
+        if not has_player: missing.append("Player Spawn [P]")
+        if not has_exit: missing.append("Exit [X]")
+        save_error_msg = f"Cannot Save! Missing: {', '.join(missing)}"
+        app_state = "SAVE_ERROR_MODAL"
+        return
+
     if not os.path.exists("maps"):
         os.makedirs("maps")
 
@@ -275,6 +382,9 @@ while running:
     base_tile_size = min(avail_w / grid_cols, avail_h / grid_rows)
     current_tile_size = base_tile_size * zoom_level
 
+    # Cursor blink timer calculation
+    show_cursor = (pygame.time.get_ticks() // 500) % 2 == 0
+
     for event in pygame.event.get():
         if event.type == pygame.QUIT:
             running = False
@@ -293,13 +403,32 @@ while running:
 
         # --- 2. NEW MAP NAME INPUT STATE ---
         elif app_state == "NEW_MAP_NAME":
-            if event.type == pygame.KEYDOWN:
+            btn_confirm = pygame.Rect(SCREEN_WIDTH // 2 - 110, SCREEN_HEIGHT // 2 + 35, 100, 32)
+            btn_cancel = pygame.Rect(SCREEN_WIDTH // 2 + 10, SCREEN_HEIGHT // 2 + 35, 100, 32)
+
+            if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                if btn_confirm.collidepoint(mouse_x, mouse_y):
+                    if text_input_val.strip():
+                        map_filename = text_input_val.strip()
+                        grid_cols, grid_rows = DEFAULT_COLS, DEFAULT_ROWS
+                        grid = [['.' for _ in range(grid_cols)] for _ in range(grid_rows)]
+                        sign_texts = {}
+                        undo_stack.clear()
+                        redo_stack.clear()
+                        reset_pan_zoom()
+                        app_state = "EDITOR"
+                elif btn_cancel.collidepoint(mouse_x, mouse_y):
+                    app_state = "START_MENU"
+
+            elif event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_RETURN:
                     if text_input_val.strip():
                         map_filename = text_input_val.strip()
                         grid_cols, grid_rows = DEFAULT_COLS, DEFAULT_ROWS
                         grid = [['.' for _ in range(grid_cols)] for _ in range(grid_rows)]
                         sign_texts = {}
+                        undo_stack.clear()
+                        redo_stack.clear()
                         reset_pan_zoom()
                         app_state = "EDITOR"
                 elif event.key == pygame.K_BACKSPACE:
@@ -371,7 +500,33 @@ while running:
                 elif len(template_name_input) < 20 and event.unicode.isprintable():
                     template_name_input += event.unicode
 
-        # --- 6. EDITOR STATE ---
+        # --- 6. CLEAR CANVAS CONFIRMATION MODAL STATE ---
+        elif app_state == "CLEAR_CANVAS_CONFIRM":
+            box_w, box_h = 360, 130
+            modal_box = pygame.Rect(SCREEN_WIDTH // 2 - box_w // 2, SCREEN_HEIGHT // 2 - box_h // 2, box_w, box_h)
+            btn_yes = pygame.Rect(modal_box.x + 40, modal_box.y + 75, 120, 32)
+            btn_no = pygame.Rect(modal_box.x + 200, modal_box.y + 75, 120, 32)
+
+            if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                if btn_yes.collidepoint(mouse_x, mouse_y):
+                    clear_canvas()
+                    app_state = "EDITOR"
+                elif btn_no.collidepoint(mouse_x, mouse_y):
+                    app_state = "EDITOR"
+            elif event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+                app_state = "EDITOR"
+
+        # --- 7. SAVE ERROR MODAL STATE ---
+        elif app_state == "SAVE_ERROR_MODAL":
+            box_w, box_h = 420, 130
+            modal_box = pygame.Rect(SCREEN_WIDTH // 2 - box_w // 2, SCREEN_HEIGHT // 2 - box_h // 2, box_w, box_h)
+            btn_ok = pygame.Rect(modal_box.centerx - 50, modal_box.y + 80, 100, 30)
+
+            if (event.type == pygame.MOUSEBUTTONDOWN and event.button == 1 and btn_ok.collidepoint(mouse_x, mouse_y)) or \
+               (event.type == pygame.KEYDOWN and event.key in [pygame.K_RETURN, pygame.K_ESCAPE]):
+                app_state = "EDITOR"
+
+        # --- 8. EDITOR STATE ---
         elif app_state == "EDITOR":
             keys = pygame.key.get_pressed()
 
@@ -386,7 +541,15 @@ while running:
                     pan_offset_y = mouse_y - (mouse_y - pan_offset_y) * (zoom_level / old_zoom)
 
             elif event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_r:
+                # Ctrl+Z (Undo) and Ctrl+Y / Ctrl+Shift+Z (Redo)
+                if event.key == pygame.K_z and (keys[pygame.K_LCTRL] or keys[pygame.K_RCTRL]):
+                    if keys[pygame.K_LSHIFT] or keys[pygame.K_RSHIFT]:
+                        redo()
+                    else:
+                        undo()
+                elif event.key == pygame.K_y and (keys[pygame.K_LCTRL] or keys[pygame.K_RCTRL]):
+                    redo()
+                elif event.key == pygame.K_r:
                     reset_pan_zoom()
                 elif event.key == pygame.K_ESCAPE:
                     selected_template = None
@@ -468,9 +631,13 @@ while running:
                             elif p2_rect.collidepoint(mouse_x, mouse_y): pen_size = 2
                             elif p3_rect.collidepoint(mouse_x, mouse_y): pen_size = 3
 
-                            border_btn = pygame.Rect(sidebar_x + 12, 180, 225, 32)
+                            border_btn = pygame.Rect(sidebar_x + 12, 175, 225, 32)
                             if border_btn.collidepoint(mouse_x, mouse_y):
                                 auto_add_border_walls()
+
+                            clear_btn = pygame.Rect(sidebar_x + 12, 220, 225, 32)
+                            if clear_btn.collidepoint(mouse_x, mouse_y):
+                                app_state = "CLEAR_CANVAS_CONFIRM"
 
                         # TAB 4: TEMPLATES
                         elif sidebar_tab == "TEMPLATES":
@@ -513,10 +680,9 @@ while running:
                             elif event.button == 3:
                                 selected_template = None
                         else:
-                            if event.button == 1:
-                                paint_brush(r, c, selected_tool)
-                            elif event.button == 3:
-                                paint_brush(r, c, '.')
+                            if event.button in [1, 3]:
+                                save_state()  # Push state snapshot on stroke start
+                                paint_brush(r, c, selected_tool if event.button == 1 else '.')
 
             elif event.type == pygame.MOUSEBUTTONUP:
                 if event.button == 2 or event.button == 1:
@@ -580,17 +746,30 @@ while running:
     # 2. NEW MAP NAME DISPLAY
     elif app_state == "NEW_MAP_NAME":
         hdr = title_font.render("ENTER NEW MAP NAME", True, (240, 190, 40))
-        screen.blit(hdr, hdr.get_rect(center=(SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2 - 50)))
+        screen.blit(hdr, hdr.get_rect(center=(SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2 - 60)))
 
-        input_box = pygame.Rect(SCREEN_WIDTH // 2 - 140, SCREEN_HEIGHT // 2 - 10, 280, 36)
+        input_box = pygame.Rect(SCREEN_WIDTH // 2 - 140, SCREEN_HEIGHT // 2 - 15, 280, 36)
         pygame.draw.rect(screen, (25, 22, 34), input_box, border_radius=4)
         pygame.draw.rect(screen, (240, 190, 40), input_box, 2, border_radius=4)
 
-        txt_surf = font.render(text_input_val + "_", True, (255, 255, 255))
-        screen.blit(txt_surf, (input_box.x + 12, input_box.y + 10))
+        txt_surf = font.render(text_input_val, True, (255, 255, 255))
+        screen.blit(txt_surf, (input_box.x + 12, input_box.y + 11))
 
-        hint = small_font.render("Press [ENTER] to Confirm | [ESC] Cancel", True, (140, 140, 160))
-        screen.blit(hint, hint.get_rect(center=(SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2 + 42)))
+        if show_cursor:
+            cursor_x = input_box.x + 12 + txt_surf.get_width() + 2
+            pygame.draw.line(screen, (240, 190, 40), (cursor_x, input_box.y + 8), (cursor_x, input_box.y + 26), 2)
+
+        btn_confirm = pygame.Rect(SCREEN_WIDTH // 2 - 110, SCREEN_HEIGHT // 2 + 35, 100, 32)
+        btn_cancel = pygame.Rect(SCREEN_WIDTH // 2 + 10, SCREEN_HEIGHT // 2 + 35, 100, 32)
+
+        pygame.draw.rect(screen, (45, 180, 90), btn_confirm, border_radius=4)
+        pygame.draw.rect(screen, (180, 60, 60), btn_cancel, border_radius=4)
+
+        c_txt = font.render("CONFIRM", True, (10, 20, 10))
+        can_txt = font.render("CANCEL", True, (255, 255, 255))
+
+        screen.blit(c_txt, c_txt.get_rect(center=btn_confirm.center))
+        screen.blit(can_txt, can_txt.get_rect(center=btn_cancel.center))
 
     # 3. LOAD MAP SELECTION DISPLAY
     elif app_state == "LOAD_MAP_SELECT":
@@ -618,7 +797,7 @@ while running:
         screen.blit(b_txt, b_txt.get_rect(center=back_btn.center))
 
     # 4. EDITOR DISPLAY
-    elif app_state in ["EDITOR", "SIGN_TEXT_MODAL", "SAVE_TEMPLATE_NAME_MODAL"]:
+    elif app_state in ["EDITOR", "SIGN_TEXT_MODAL", "SAVE_TEMPLATE_NAME_MODAL", "CLEAR_CANVAS_CONFIRM", "SAVE_ERROR_MODAL"]:
         # Render Scaled Grid Tiles
         for r in range(grid_rows):
             for c in range(grid_cols):
@@ -776,7 +955,7 @@ while running:
 
             w_lbl = small_font.render("Cols (W):", True, (180, 180, 200))
             screen.blit(w_lbl, (sidebar_x + 12, 194))
-            
+
             btn_w_dec = pygame.Rect(sidebar_x + 120, 190, 24, 22)
             btn_w_inc = pygame.Rect(sidebar_x + 185, 190, 24, 22)
             pygame.draw.rect(screen, (45, 40, 60), btn_w_dec, border_radius=3)
@@ -802,7 +981,7 @@ while running:
             dropdown_rect = pygame.Rect(sidebar_x + 12, 280, 225, 26)
             pygame.draw.rect(screen, (35, 30, 45), dropdown_rect, border_radius=3)
             pygame.draw.rect(screen, (100, 90, 120), dropdown_rect, 1, border_radius=3)
-            
+
             dd_txt = small_font.render(f"Switch File: {map_filename}.txt v", True, (220, 220, 240))
             screen.blit(dd_txt, (dropdown_rect.x + 8, dropdown_rect.y + 6))
 
@@ -812,7 +991,7 @@ while running:
                     item_rect = pygame.Rect(sidebar_x + 12, item_y, 225, 22)
                     pygame.draw.rect(screen, (45, 40, 60), item_rect)
                     pygame.draw.rect(screen, (80, 70, 100), item_rect, 1)
-                    
+
                     f_txt = small_font.render(f_name, True, (240, 240, 250))
                     screen.blit(f_txt, (item_rect.x + 8, item_rect.y + 3))
                     item_y += 24
@@ -835,11 +1014,23 @@ while running:
 
             pygame.draw.line(screen, (60, 55, 75), (sidebar_x + 12, 155), (SCREEN_WIDTH - 12, 155), 1)
 
-            border_btn = pygame.Rect(sidebar_x + 12, 180, 225, 32)
+            # Auto Border Wall Button
+            border_btn = pygame.Rect(sidebar_x + 12, 175, 225, 32)
             pygame.draw.rect(screen, (65, 55, 85), border_btn, border_radius=4)
             pygame.draw.rect(screen, (140, 120, 170), border_btn, 1, border_radius=4)
             b_lbl = font.render("AUTO BORDER WALL", True, (240, 230, 255))
             screen.blit(b_lbl, b_lbl.get_rect(center=border_btn.center))
+
+            # Clear Canvas Button
+            clear_btn = pygame.Rect(sidebar_x + 12, 220, 225, 32)
+            pygame.draw.rect(screen, (180, 50, 50), clear_btn, border_radius=4)
+            pygame.draw.rect(screen, (220, 80, 80), clear_btn, 1, border_radius=4)
+            c_lbl = font.render("CLEAR CANVAS", True, (255, 255, 255))
+            screen.blit(c_lbl, c_lbl.get_rect(center=clear_btn.center))
+
+            # Undo / Redo Legend
+            legend_txt = small_font.render("[Ctrl+Z] Undo  |  [Ctrl+Y] Redo", True, (140, 140, 160))
+            screen.blit(legend_txt, (sidebar_x + 12, 270))
 
         # --- TAB CONTENT: TEMPLATES ---
         elif sidebar_tab == "TEMPLATES":
@@ -893,8 +1084,12 @@ while running:
             pygame.draw.rect(screen, (12, 10, 16), t_box, border_radius=3)
             pygame.draw.rect(screen, (100, 90, 120), t_box, 1, border_radius=3)
 
-            in_txt = font.render(text_input_val + "_", True, (255, 255, 255))
-            screen.blit(in_txt, (t_box.x + 8, t_box.y + 7))
+            in_txt = font.render(text_input_val, True, (255, 255, 255))
+            screen.blit(in_txt, (t_box.x + 8, t_box.y + 9))
+
+            if show_cursor:
+                cursor_x = t_box.x + 8 + in_txt.get_width() + 2
+                pygame.draw.line(screen, (240, 190, 40), (cursor_x, t_box.y + 6), (cursor_x, t_box.y + 24), 2)
 
             h_txt = small_font.render("Press [ENTER] to Save | [ESC] Cancel", True, (150, 145, 165))
             screen.blit(h_txt, (modal_box.x + 16, modal_box.y + 92))
@@ -917,11 +1112,60 @@ while running:
             pygame.draw.rect(screen, (12, 10, 16), t_box, border_radius=3)
             pygame.draw.rect(screen, (100, 90, 120), t_box, 1, border_radius=3)
 
-            in_txt = font.render(template_name_input + "_", True, (255, 255, 255))
-            screen.blit(in_txt, (t_box.x + 8, t_box.y + 7))
+            in_txt = font.render(template_name_input, True, (255, 255, 255))
+            screen.blit(in_txt, (t_box.x + 8, t_box.y + 9))
+
+            if show_cursor:
+                cursor_x = t_box.x + 8 + in_txt.get_width() + 2
+                pygame.draw.line(screen, (80, 220, 255), (cursor_x, t_box.y + 6), (cursor_x, t_box.y + 24), 2)
 
             h_txt = small_font.render("Press [ENTER] to Save Template | [ESC] Cancel", True, (150, 145, 165))
             screen.blit(h_txt, (modal_box.x + 16, modal_box.y + 92))
+
+        # Clear Canvas Confirmation Modal
+        elif app_state == "CLEAR_CANVAS_CONFIRM":
+            overlay = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
+            overlay.fill((0, 0, 0, 180))
+            screen.blit(overlay, (0, 0))
+
+            box_w, box_h = 360, 130
+            modal_box = pygame.Rect(SCREEN_WIDTH // 2 - box_w // 2, SCREEN_HEIGHT // 2 - box_h // 2, box_w, box_h)
+            pygame.draw.rect(screen, (22, 18, 28), modal_box, border_radius=6)
+            pygame.draw.rect(screen, (220, 80, 80), modal_box, 2, border_radius=6)
+
+            q_txt = font.render("Clear the entire canvas?", True, (240, 230, 250))
+            screen.blit(q_txt, q_txt.get_rect(center=(modal_box.centerx, modal_box.y + 35)))
+
+            btn_yes = pygame.Rect(modal_box.x + 40, modal_box.y + 75, 120, 32)
+            btn_no = pygame.Rect(modal_box.x + 200, modal_box.y + 75, 120, 32)
+
+            pygame.draw.rect(screen, (180, 50, 50), btn_yes, border_radius=4)
+            pygame.draw.rect(screen, (60, 55, 75), btn_no, border_radius=4)
+
+            y_txt = font.render("YES", True, (255, 255, 255))
+            n_txt = font.render("NO", True, (220, 220, 230))
+
+            screen.blit(y_txt, y_txt.get_rect(center=btn_yes.center))
+            screen.blit(n_txt, n_txt.get_rect(center=btn_no.center))
+
+        # Save Error Modal
+        elif app_state == "SAVE_ERROR_MODAL":
+            overlay = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
+            overlay.fill((0, 0, 0, 180))
+            screen.blit(overlay, (0, 0))
+
+            box_w, box_h = 420, 130
+            modal_box = pygame.Rect(SCREEN_WIDTH // 2 - box_w // 2, SCREEN_HEIGHT // 2 - box_h // 2, box_w, box_h)
+            pygame.draw.rect(screen, (22, 18, 28), modal_box, border_radius=6)
+            pygame.draw.rect(screen, (220, 80, 80), modal_box, 2, border_radius=6)
+
+            err_txt = font.render(save_error_msg or "Cannot Save Map!", True, (255, 120, 120))
+            screen.blit(err_txt, err_txt.get_rect(center=(modal_box.centerx, modal_box.y + 40)))
+
+            btn_ok = pygame.Rect(modal_box.centerx - 50, modal_box.y + 80, 100, 30)
+            pygame.draw.rect(screen, (60, 55, 75), btn_ok, border_radius=4)
+            ok_txt = font.render("OK", True, (255, 255, 255))
+            screen.blit(ok_txt, ok_txt.get_rect(center=btn_ok.center))
 
     pygame.display.flip()
     clock.tick(60)
