@@ -2,8 +2,8 @@ import os
 import json
 import random
 import pygame
-from torch import TorchTile
-from sign import SignTile
+from assets.torch import TorchTile
+from assets.sign import SignTile
 
 TILE_SIZE = 28
 

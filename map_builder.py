@@ -2,6 +2,9 @@ import os
 import json
 import pygame
 
+from assets.torch import TorchTile
+from assets.sign import SignTile
+
 pygame.init()
 
 # Fixed Window Dimensions

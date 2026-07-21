@@ -1,19 +1,23 @@
 import pygame
 import sys
 
-# Imported from events/ subfolder
+# Events package imports
 from events.map_loader import load_random_map, draw_dungeon, TILE_SIZE
 from events.main_menu import MainMenu
 from events.loading import LoadingScreen
 from events.tab_menu import TabMenu
 
-# Imported from root directory
-from minimap import draw_minimap
-from player import PlayerStats
+# Globals package imports
+from globals.player import PlayerStats
+from globals.minimap import draw_minimap
+from globals.cursor import CustomCursor
+from globals.fog import FogOfWar
+
+# Weapons directory imports
 from weapons.sword.sword import Sword
-from fog import FogOfWar
-from sign import DialogModal
-from cursor import CustomCursor
+
+# Assets package imports
+from assets.sign import DialogModal
 
 pygame.init()
 
