@@ -28,7 +28,7 @@ pos_y = 0.0
 
 def reset_game():
     global pos_x, pos_y
-    walls, player_start, exit_start, file_name = load_random_map("maps")
+    walls, torches, player_start, exit_start, file_name = load_random_map("maps")
 
     player_size = 12
     offset = (TILE_SIZE - player_size) // 2
@@ -45,9 +45,9 @@ def reset_game():
     exit_y = exit_start[1] * TILE_SIZE + 6
     chest_rect = pygame.Rect(exit_x, exit_y, 28, 28)
 
-    return walls, player_rect, chest_rect, file_name
+    return walls, torches, player_rect, chest_rect, file_name
 
-walls, player_rect, chest_rect, map_name = reset_game()
+walls, torches, player_rect, chest_rect, map_name = reset_game()
 sword = Sword()
 player_stats = PlayerStats()
 fog = FogOfWar(vision_radius=260)
@@ -114,7 +114,7 @@ while running:
 
         elif event.type == pygame.KEYDOWN:
             if event.key == pygame.K_r:
-                walls, player_rect, chest_rect, map_name = reset_game()
+                walls, torches, player_rect, chest_rect, map_name = reset_game()
                 sword = Sword()
                 player_stats = PlayerStats()
                 game_won = False
@@ -143,27 +143,25 @@ while running:
         if player_rect.colliderect(chest_rect):
             game_won = True
 
-    # 2. RENDER WORLD TO LEVEL SURFACE
+    # 2. RENDER WORLD & TORCHES TO LEVEL SURFACE
     world_surface.fill(FLOOR_COLOR)
-    draw_dungeon(world_surface, walls)
+    draw_dungeon(world_surface, walls, torches)
     pygame.draw.rect(world_surface, CHEST_COLOR, chest_rect, border_radius=4)
     pygame.draw.rect(world_surface, PLAYER_COLOR, player_rect, border_radius=2)
     
     sword.draw(world_surface, player_rect, mouse_world)
-    fog.draw(world_surface, player_rect, walls)
+    fog.draw(world_surface, player_rect, walls, torches)
 
-    # 3. CAMERA VIEW SURFACE (Allows rendering off-map void gracefully)
+    # 3. CAMERA VIEW SURFACE (Render off-map void gracefully)
     camera_view = pygame.Surface((view_w, view_h), pygame.SRCALPHA)
     camera_view.fill((*VOID_COLOR, 255))
 
-    # Calculate overlap rectangle of camera on world map
     map_rect = pygame.Rect(0, 0, MAP_WIDTH, MAP_HEIGHT)
     cam_rect = pygame.Rect(cam_x, cam_y, view_w, view_h)
     
     overlap_rect = cam_rect.clip(map_rect)
     
     if overlap_rect.width > 0 and overlap_rect.height > 0:
-        # Blit only the visible portion of the level onto the camera view
         sub_surface = world_surface.subsurface(overlap_rect)
         dest_x = overlap_rect.x - cam_x
         dest_y = overlap_rect.y - cam_y

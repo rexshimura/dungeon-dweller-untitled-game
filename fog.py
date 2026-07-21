@@ -1,19 +1,25 @@
 import pygame
 import math
+import random
 
 class FogOfWar:
     def __init__(self, vision_radius=260, max_shadow_opacity=185):
         self.vision_radius = vision_radius
         self.max_shadow_opacity = max_shadow_opacity
-        self.gradient_light = self._create_gradient_light(vision_radius)
+        self.player_light = self._create_gradient_light(vision_radius, (255, 255, 255))
+        
+        # Torch light (Warm amber glow)
+        self.torch_light_radius = 110
+        self.torch_light_base = self._create_gradient_light(self.torch_light_radius, (255, 180, 80))
 
-    def _create_gradient_light(self, radius):
+    def _create_gradient_light(self, radius, color):
         size = radius * 2
         surf = pygame.Surface((size, size), pygame.SRCALPHA)
+        r_c, g_c, b_c = color
         
         for r in range(radius, 0, -2):
             alpha = int(255 * (1.0 - (r / radius) ** 1.8))
-            pygame.draw.circle(surf, (255, 255, 255, alpha), (radius, radius), r)
+            pygame.draw.circle(surf, (r_c, g_c, b_c, alpha), (radius, radius), r)
             
         return surf
 
@@ -32,7 +38,7 @@ class FogOfWar:
         to_player = player_pos - midpoint
         return normal.dot(to_player) > 0
 
-    def draw(self, target_surface, player_rect, walls):
+    def draw(self, target_surface, player_rect, walls, torches=[]):
         px, py = player_rect.centerx, player_rect.centery
         player_pos = pygame.Vector2(px, py)
         width, height = target_surface.get_width(), target_surface.get_height()
@@ -41,10 +47,22 @@ class FogOfWar:
         dark_overlay.fill((10, 8, 14, self.max_shadow_opacity))
 
         light_mask = pygame.Surface((width, height), pygame.SRCALPHA)
+
+        # 1. BLIT TORCH LIGHTS (With warm subtle flicker)
+        for torch in torches:
+            flicker_scale = 1.0 + random.uniform(-0.04, 0.04)
+            scaled_r = int(self.torch_light_radius * flicker_scale)
+            
+            # Position centered on torch flame
+            tx, ty = torch.flame_pos.x, torch.flame_pos.y
+            light_mask.blit(self.torch_light_base, (tx - self.torch_light_radius, ty - self.torch_light_radius))
+
+        # 2. BLIT PLAYER LIGHT
         grad_x = px - self.vision_radius
         grad_y = py - self.vision_radius
-        light_mask.blit(self.gradient_light, (grad_x, grad_y))
+        light_mask.blit(self.player_light, (grad_x, grad_y))
 
+        # 3. CAST SHADOW QUADS FROM PLAYER VISION
         nearby_walls = [
             w for w in walls 
             if abs(w.centerx - px) < self.vision_radius + 60 and abs(w.centery - py) < self.vision_radius + 60
@@ -66,8 +84,10 @@ class FogOfWar:
                     shadow_quad = [p1, p2, (proj2.x, proj2.y), (proj1.x, proj1.y)]
                     pygame.draw.polygon(light_mask, (0, 0, 0, 0), shadow_quad)
 
+        # Subtract light mask from fog
         dark_overlay.blit(light_mask, (0, 0), special_flags=pygame.BLEND_RGBA_SUB)
 
+        # Wall opacity dimming
         for wall in nearby_walls:
             wall_center = pygame.Vector2(wall.centerx, wall.centery)
             dist = player_pos.distance_to(wall_center)

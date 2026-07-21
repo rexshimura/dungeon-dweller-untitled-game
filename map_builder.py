@@ -1,166 +1,233 @@
 import pygame
 import sys
+import os
 
 pygame.init()
 
-# Setup Grid Configuration (40 cols x 30 rows @ 20px = 800x600 window)
-COLS, ROWS = 40, 30
-TILE_SIZE = 20
-WIDTH, HEIGHT = COLS * TILE_SIZE, ROWS * TILE_SIZE
+# Editor Settings
+GRID_COLS, GRID_ROWS = 32, 24
+TILE_SIZE = 28
+PALETTE_HEIGHT = 80
 
-screen = pygame.display.set_mode((WIDTH, HEIGHT))
-pygame.display.set_caption("Map Builder | 1: Wall | 2: Floor | P: Player Spawn | E: Exit/Treasure | S: Export")
+SCREEN_WIDTH = GRID_COLS * TILE_SIZE
+SCREEN_HEIGHT = (GRID_ROWS * TILE_SIZE) + PALETTE_HEIGHT
+
+screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
+pygame.display.set_caption("Dungeon Map Builder")
 clock = pygame.time.Clock()
 
 # Colors
 COLOR_BG = (15, 12, 20)
-COLOR_WALL = (40, 35, 55)
-COLOR_GRID = (30, 25, 40)
-COLOR_TEXT = (255, 255, 255)
-COLOR_OUTLINE = (70, 65, 90)
-COLOR_PLAYER = (60, 180, 240)    # Blue for Player
-COLOR_EXIT = (240, 190, 40)      # Gold for Exit
+COLOR_GRID = (35, 30, 45)
+COLOR_PALETTE_BG = (22, 20, 30)
+COLOR_TEXT = (240, 240, 255)
+COLOR_HIGHLIGHT = (255, 215, 0)
 
-# 0 = Floor, 1 = Wall, 2 = Player, 3 = Exit
-grid = [[0 for _ in range(COLS)] for _ in range(ROWS)]
+# Tile Definitions & Colors
+TILE_TYPES = {
+    "0": {"name": "Floor", "color": (30, 25, 40), "symbol": "0"},
+    "#": {"name": "Wall", "color": (120, 125, 140), "symbol": "#"},
+    "1": {"name": "Torch", "color": (255, 160, 40), "symbol": "1"},
+    "P": {"name": "Player Spawn", "color": (50, 230, 110), "symbol": "P"},
+    "X": {"name": "Exit Chest", "color": (240, 190, 40), "symbol": "X"},
+}
 
-# Add outer boundary default walls
-for r in range(ROWS):
-    for c in range(COLS):
-        if r == 0 or r == ROWS - 1 or c == 0 or c == COLS - 1:
-            grid[r][c] = 1
+TILE_KEYS = ["0", "#", "1", "P", "X"]
+selected_tile_index = 1  # Default to Wall '#'
 
-# Default positions
-player_pos = (1, 1)
-exit_pos = (COLS - 2, ROWS - 2)
-grid[player_pos[1]][player_pos[0]] = 2
-grid[exit_pos[1]][exit_pos[0]] = 3
+# Map Data Storage
+grid = [["0" for _ in range(GRID_COLS)] for _ in range(GRID_ROWS)]
 
-# Selected Mode: "WALL", "ERASE", "PLAYER", "EXIT"
-mode = "WALL"
+font = pygame.font.SysFont("Arial", 14, bold=True)
+small_font = pygame.font.SysFont("Arial", 12)
 
-def clear_value_from_grid(val):
-    """Ensures there is only ever ONE player and ONE exit on the map."""
-    for r in range(ROWS):
-        for c in range(COLS):
-            if grid[r][c] == val:
-                grid[r][c] = 0
-
-def export_map():
-    global player_pos, exit_pos
+def detect_torch_attachment(grid, r, c):
+    """
+    Checks adjacent tiles and returns attachment orientation:
+    'LEFT', 'RIGHT', 'TOP', 'BOTTOM', or 'NONE'
+    Rule: [Wall A][None][Torch][Wall B] -> Torch attaches to Wall B's LEFT side.
+    """
+    # Check Wall B (Right)
+    if c + 1 < GRID_COLS and grid[r][c + 1] == "#":
+        return "LEFT"
+    # Check Wall A (Left)
+    if c - 1 >= 0 and grid[r][c - 1] == "#":
+        return "RIGHT"
+    # Check Wall Above
+    if r - 1 >= 0 and grid[r - 1][c] == "#":
+        return "BOTTOM"
+    # Check Wall Below
+    if r + 1 < GRID_ROWS and grid[r + 1][c] == "#":
+        return "TOP"
     
-    # Locate player & exit positions
-    for r in range(ROWS):
-        for c in range(COLS):
-            if grid[r][c] == 2:
-                player_pos = (c, r)
-            elif grid[r][c] == 3:
-                exit_pos = (c, r)
+    return "NONE"
 
-    print("\n" + "="*50)
-    print("--- COPY THIS DATA INTO YOUR MAP.PY FILE ---")
-    print("="*50)
+def draw_torch(surface, rect, attachment):
+    """Draws a pixel torch icon with flame attached to its wall side."""
+    cx, cy = rect.centerx, rect.centery
     
-    formatted_rows = []
-    for row in grid:
-        # Convert player (2) and exit (3) back to floor (0) in the printed maze array
-        # so the collision map stays clean (0 = floor, 1 = wall)
-        clean_row = [0 if cell in (2, 3) else cell for cell in row]
-        formatted_rows.append("    [" + ",".join(str(cell) for cell in clean_row) + "]")
-    
-    output = f"""PLAYER_START = ({player_pos[0]}, {player_pos[1]})  # (col, row)
-EXIT_START = ({exit_pos[0]}, {exit_pos[1]})      # (col, row)
+    # Position torch base according to attachment side
+    if attachment == "LEFT":
+        wood_rect = pygame.Rect(rect.right - 8, cy - 2, 6, 4)
+        flame_pos = (rect.right - 10, cy)
+    elif attachment == "RIGHT":
+        wood_rect = pygame.Rect(rect.left + 2, cy - 2, 6, 4)
+        flame_pos = (rect.left + 10, cy)
+    elif attachment == "BOTTOM":
+        wood_rect = pygame.Rect(cx - 2, rect.top + 2, 4, 6)
+        flame_pos = (cx, rect.top + 10)
+    elif attachment == "TOP":
+        wood_rect = pygame.Rect(cx - 2, rect.bottom - 8, 4, 6)
+        flame_pos = (cx, rect.bottom - 10)
+    else:  # Unattached (Center)
+        wood_rect = pygame.Rect(cx - 2, cy - 2, 4, 6)
+        flame_pos = (cx, cy - 4)
 
-MAZE = [
-""" + ",\n".join(formatted_rows) + "\n]"
+    # Draw Wooden Handle
+    pygame.draw.rect(surface, (110, 65, 25), wood_rect)
+    # Draw Outer Glow & Flame
+    pygame.draw.circle(surface, (255, 120, 20, 180), flame_pos, 5)
+    pygame.draw.circle(surface, (255, 220, 80), flame_pos, 3)
 
-    print(output)
-    print("="*50)
-    
-    with open("map_data.txt", "w") as f:
-        f.write(output)
-    print(" Saved successfully to 'map_data.txt'!\n")
+def save_map(filename="map_custom.txt"):
+    os.makedirs("maps", exist_ok=True)
+    filepath = os.path.join("maps", filename)
+    with open(filepath, "w") as f:
+        for row in grid:
+            f.write("".join(row) + "\n")
+    print(f"[MAP SAVED] -> {filepath}")
 
-font = pygame.font.SysFont("Arial", 16)
-saved_notice_timer = 0
+def load_map(filename="map_custom.txt"):
+    global grid
+    filepath = os.path.join("maps", filename)
+    if os.path.exists(filepath):
+        with open(filepath, "r") as f:
+            lines = [line.strip() for line in f.readlines() if line.strip()]
+            for r in range(min(GRID_ROWS, len(lines))):
+                for c in range(min(GRID_COLS, len(lines[r]))):
+                    grid[r][c] = lines[r][c]
+        print(f"[MAP LOADED] -> {filepath}")
+    else:
+        print(f"[ERROR] File not found: {filepath}")
 
-# Main Editor Loop
-drawing = True
-while drawing:
+running = True
+message_timer = 0
+status_msg = "Left-Click: Place | Right-Click: Erase | [S] Save | [L] Load"
+
+while running:
+    mouse_x, mouse_y = pygame.mouse.get_pos()
+    grid_col = mouse_x // TILE_SIZE
+    grid_row = mouse_y // TILE_SIZE
+
     for event in pygame.event.get():
         if event.type == pygame.QUIT:
-            drawing = False
-            
+            running = False
+
         elif event.type == pygame.KEYDOWN:
-            # Mode selection shortcuts
-            if event.key == pygame.K_1:
-                mode = "WALL"
-            elif event.key == pygame.K_2:
-                mode = "ERASE"
-            elif event.key == pygame.K_p:
-                mode = "PLAYER"
-            elif event.key == pygame.K_e:
-                mode = "EXIT"
-            # Export / Save
-            elif event.key == pygame.K_s or event.key == pygame.K_RETURN:
-                export_map()
-                saved_notice_timer = 120
-            # Clear canvas
-            elif event.key == pygame.K_c:
-                grid = [[1 if (r == 0 or r == ROWS - 1 or c == 0 or c == COLS - 1) else 0 for c in range(COLS)] for r in range(ROWS)]
-                grid[1][1] = 2
-                grid[ROWS - 2][COLS - 2] = 3
+            if event.key == pygame.K_1: selected_tile_index = 0
+            elif event.key == pygame.K_2: selected_tile_index = 1
+            elif event.key == pygame.K_3: selected_tile_index = 2
+            elif event.key == pygame.K_4: selected_tile_index = 3
+            elif event.key == pygame.K_5: selected_tile_index = 4
+            elif event.key == pygame.K_s:
+                save_map("map_01.txt")
+                status_msg = "Map Saved to maps/map_01.txt!"
+                message_timer = 120
+            elif event.key == pygame.K_l:
+                load_map("map_01.txt")
+                status_msg = "Map Loaded from maps/map_01.txt!"
+                message_timer = 120
 
-    # Mouse placement logic
+        elif event.type == pygame.MOUSEBUTTONDOWN:
+            # Click Palette
+            if mouse_y >= GRID_ROWS * TILE_SIZE:
+                for idx in range(len(TILE_KEYS)):
+                    box_x = 20 + (idx * 85)
+                    box_y = (GRID_ROWS * TILE_SIZE) + 15
+                    rect = pygame.Rect(box_x, box_y, 75, 45)
+                    if rect.collidepoint(mouse_x, mouse_y):
+                        selected_tile_index = idx
+
+    # Mouse Paint / Erase Dragging
     mouse_buttons = pygame.mouse.get_pressed()
-    if mouse_buttons[0] or mouse_buttons[2]:
-        mx, my = pygame.mouse.get_pos()
-        col = mx // TILE_SIZE
-        row = my // TILE_SIZE
-        
-        # Don't overwrite outer boundary walls
-        if 0 < row < ROWS - 1 and 0 < col < COLS - 1:
-            if mouse_buttons[2]:  # Right click always erases
-                grid[row][col] = 0
-            elif mouse_buttons[0]:  # Left click places active tool
-                if mode == "WALL":
-                    grid[row][col] = 1
-                elif mode == "ERASE":
-                    grid[row][col] = 0
-                elif mode == "PLAYER":
-                    clear_value_from_grid(2)
-                    grid[row][col] = 2
-                elif mode == "EXIT":
-                    clear_value_from_grid(3)
-                    grid[row][col] = 3
+    if 0 <= grid_row < GRID_ROWS and 0 <= grid_col < GRID_COLS:
+        if mouse_buttons[0]:  # Left Click Paint
+            sym = TILE_KEYS[selected_tile_index]
+            # Ensure unique P and X
+            if sym in ["P", "X"]:
+                for r in range(GRID_ROWS):
+                    for c in range(GRID_COLS):
+                        if grid[r][c] == sym:
+                            grid[r][c] = "0"
+            grid[grid_row][grid_col] = sym
 
-    # Rendering
+        elif mouse_buttons[2]:  # Right Click Erase (Set to Floor)
+            grid[grid_row][grid_col] = "0"
+
+    # --- RENDER ---
     screen.fill(COLOR_BG)
-    
-    for r in range(ROWS):
-        for c in range(COLS):
-            x = c * TILE_SIZE
-            y = r * TILE_SIZE
-            val = grid[r][c]
-            
-            if val == 1:
-                pygame.draw.rect(screen, COLOR_WALL, (x, y, TILE_SIZE, TILE_SIZE))
-                pygame.draw.rect(screen, COLOR_OUTLINE, (x, y, TILE_SIZE, TILE_SIZE), 1)
-            elif val == 2:
-                pygame.draw.rect(screen, COLOR_PLAYER, (x + 3, y + 3, TILE_SIZE - 6, TILE_SIZE - 6), border_radius=3)
-            elif val == 3:
-                pygame.draw.rect(screen, COLOR_EXIT, (x + 3, y + 3, TILE_SIZE - 6, TILE_SIZE - 6), border_radius=2)
-            else:
-                pygame.draw.rect(screen, COLOR_GRID, (x, y, TILE_SIZE, TILE_SIZE), 1)
 
-    # UI Overlay
-    mode_text = font.render(f"ACTIVE TOOL: [{mode}]  |  [1] Wall  [2] Erase  [P] Player Spawn  [E] Exit  |  Press 'S' to Save", True, COLOR_TEXT)
-    screen.blit(mode_text, (10, 5))
+    # 1. Draw Map Grid
+    for r in range(GRID_ROWS):
+        for c in range(GRID_COLS):
+            tile_sym = grid[r][c]
+            rect = pygame.Rect(c * TILE_SIZE, r * TILE_SIZE, TILE_SIZE, TILE_SIZE)
 
-    if saved_notice_timer > 0:
-        saved_text = font.render("EXPORTED TO TERMINAL & map_data.txt!", True, (100, 255, 100))
-        screen.blit(saved_text, (WIDTH - saved_text.get_width() - 10, 5))
-        saved_notice_timer -= 1
+            # Draw Floor Base
+            pygame.draw.rect(screen, TILE_TYPES["0"]["color"], rect)
+
+            # Draw Tile Type
+            if tile_sym == "#":
+                pygame.draw.rect(screen, TILE_TYPES["#"]["color"], rect, border_radius=2)
+                pygame.draw.rect(screen, (80, 85, 100), rect, 1, border_radius=2)
+
+            elif tile_sym == "1":  # Torch with Auto-Attachment
+                attachment = detect_torch_attachment(grid, r, c)
+                draw_torch(screen, rect, attachment)
+
+            elif tile_sym in ["P", "X"]:
+                t_color = TILE_TYPES[tile_sym]["color"]
+                pygame.draw.rect(screen, t_color, rect, border_radius=4)
+                txt = small_font.render(tile_sym, True, (10, 10, 15))
+                screen.blit(txt, txt.get_rect(center=rect.center))
+
+            pygame.draw.rect(screen, COLOR_GRID, rect, 1)
+
+    # 2. Draw Hover Cursor
+    if 0 <= grid_row < GRID_ROWS and 0 <= grid_col < GRID_COLS:
+        hover_rect = pygame.Rect(grid_col * TILE_SIZE, grid_row * TILE_SIZE, TILE_SIZE, TILE_SIZE)
+        pygame.draw.rect(screen, (255, 255, 255, 100), hover_rect, 2)
+
+    # 3. Draw Bottom Palette UI
+    palette_rect = pygame.Rect(0, GRID_ROWS * TILE_SIZE, SCREEN_WIDTH, PALETTE_HEIGHT)
+    pygame.draw.rect(screen, COLOR_PALETTE_BG, palette_rect)
+    pygame.draw.line(screen, (60, 55, 80), (0, GRID_ROWS * TILE_SIZE), (SCREEN_WIDTH, GRID_ROWS * TILE_SIZE), 2)
+
+    for idx, key in enumerate(TILE_KEYS):
+        box_x = 20 + (idx * 85)
+        box_y = (GRID_ROWS * TILE_SIZE) + 15
+        box_rect = pygame.Rect(box_x, box_y, 75, 45)
+
+        is_selected = (idx == selected_tile_index)
+        bg_col = (40, 35, 55) if not is_selected else (60, 55, 85)
+        border_col = COLOR_HIGHLIGHT if is_selected else (80, 75, 100)
+
+        pygame.draw.rect(screen, bg_col, box_rect, border_radius=4)
+        pygame.draw.rect(screen, border_col, box_rect, 2 if is_selected else 1, border_radius=4)
+
+        # Draw tile key preview
+        t_info = TILE_TYPES[key]
+        lbl = font.render(f"[{idx+1}] {t_info['name']}", True, COLOR_TEXT)
+        screen.blit(lbl, (box_x + 6, box_y + 12))
+
+    # Status Bar Message
+    if message_timer > 0:
+        message_timer -= 1
+        msg_surface = font.render(status_msg, True, COLOR_HIGHLIGHT)
+    else:
+        msg_surface = font.render("Left-Click: Paint | Right-Click: Erase | [S] Save | [L] Load", True, (160, 160, 180))
+
+    screen.blit(msg_surface, (SCREEN_WIDTH - msg_surface.get_width() - 20, (GRID_ROWS * TILE_SIZE) + 30))
 
     pygame.display.flip()
     clock.tick(60)
