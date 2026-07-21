@@ -239,7 +239,10 @@ while running:
                     dx *= 0.7071
                     dy *= 0.7071
 
-                move_player_exact(player_rect, dx * player_stats.move_speed, dy * player_stats.move_speed, walls)
+                # Dynamic speed calculation (1.3 normal, 0.9 while parrying)
+                current_speed = player_stats.get_speed(sword.is_parrying)
+
+                move_player_exact(player_rect, dx * current_speed, dy * current_speed, walls)
 
             sword.update(player_rect, mouse_world, move_player_exact, walls)
 

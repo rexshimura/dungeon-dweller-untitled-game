@@ -11,7 +11,12 @@ class PlayerStats:
         self.mp_regen_rate = 0.015  # Recovers 1 MP roughly every 1.1 seconds
         
         self.base_damage = 10
-        self.move_speed = 1.2  # Reduced walk speed for closer camera view
+        self.move_speed = 1.3  # Normal walk speed
+        self.parry_speed = 0.9  # Reduced walk speed while parrying
+
+    def get_speed(self, is_parrying=False):
+        """Returns movement speed based on whether the player is currently parrying."""
+        return self.parry_speed if is_parrying else self.move_speed
 
     def update(self):
         """Regenerate MP over time up to max_mp."""
