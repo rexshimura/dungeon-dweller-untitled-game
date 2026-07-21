@@ -18,8 +18,8 @@ screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
 pygame.display.set_caption("Dungeon Map Builder")
 clock = pygame.time.Clock()
 
-font = pygame.font.SysFont("Arial", 12, bold=True)
-small_font = pygame.font.SysFont("Arial", 11)
+font = pygame.font.SysFont("Arial", 11, bold=True)
+small_font = pygame.font.SysFont("Arial", 10)
 title_font = pygame.font.SysFont("Arial", 18, bold=True)
 
 
@@ -70,7 +70,7 @@ CONFIG_ITEMS = [
 
 # --- STATE VARIABLES ---
 app_state = "START_MENU"
-sidebar_tab = "OBJECTS"  # "OBJECTS", "CONFIGS", "TOOLS"
+sidebar_tab = "OBJECTS"  # "OBJECTS", "CONFIGS", "TOOLS", "TEMPLATES"
 
 grid_cols = DEFAULT_COLS
 grid_rows = DEFAULT_ROWS
@@ -78,11 +78,19 @@ grid = [['.' for _ in range(grid_cols)] for _ in range(grid_rows)]
 sign_texts = {}
 map_filename = "map_01"
 selected_tool = '#'
-pen_size = 1  # Brush size: 1x1, 2x2, 3x3
+pen_size = 1
 
 text_input_val = "map_01"
 editing_sign_coord = None
 dropdown_open = False
+
+# Templates state
+selected_template = None  # Dict with grid layout and sign texts
+active_template_name = None
+is_creating_template = False
+template_select_start = None
+template_select_end = None
+template_name_input = "room_01"
 
 # Pan and Zoom State
 zoom_level = 1.0
@@ -96,6 +104,35 @@ def get_maps_list():
     if not os.path.exists("maps"):
         os.makedirs("maps")
     return [f for f in os.listdir("maps") if f.endswith(".txt")]
+
+
+def get_templates_list():
+    folder = os.path.join("maps", "templates")
+    if not os.path.exists(folder):
+        os.makedirs(folder)
+    return [f for f in os.listdir(folder) if f.endswith(".json")]
+
+
+def save_template_to_disk(name, temp_grid, temp_signs):
+    folder = os.path.join("maps", "templates")
+    if not os.path.exists(folder):
+        os.makedirs(folder)
+    path = os.path.join(folder, f"{name}.json")
+    
+    data = {
+        "grid": temp_grid,
+        "signs": temp_signs
+    }
+    with open(path, "w") as f:
+        json.dump(data, f, indent=2)
+
+
+def load_template_from_disk(filename):
+    path = os.path.join("maps", "templates", filename)
+    if os.path.exists(path):
+        with open(path, "r") as f:
+            return json.load(f)
+    return None
 
 
 def reset_pan_zoom():
@@ -131,7 +168,6 @@ def resize_grid(new_cols, new_rows):
 
 
 def auto_add_border_walls():
-    """Applies '#' walls around the perimeter of the current canvas."""
     for r in range(grid_rows):
         for c in range(grid_cols):
             if r == 0 or r == grid_rows - 1 or c == 0 or c == grid_cols - 1:
@@ -140,7 +176,6 @@ def auto_add_border_walls():
 
 
 def paint_brush(center_r, center_c, tool):
-    """Paints tiles according to current pen_size."""
     half = pen_size // 2
     for dr in range(-half, half + 1 if pen_size % 2 != 0 else half):
         for dc in range(-half, half + 1 if pen_size % 2 != 0 else half):
@@ -154,6 +189,25 @@ def paint_brush(center_r, center_c, tool):
                     app_state = "SIGN_TEXT_MODAL"
                 elif tool == '.':
                     sign_texts.pop(f"{r},{c}", None)
+
+
+def stamp_template(start_r, start_c, template):
+    temp_grid = template["grid"]
+    temp_signs = template["signs"]
+    t_rows = len(temp_grid)
+    t_cols = len(temp_grid[0]) if t_rows > 0 else 0
+
+    for r in range(t_rows):
+        for c in range(t_cols):
+            target_r = start_r + r
+            target_c = start_c + c
+            if 0 <= target_r < grid_rows and 0 <= target_c < grid_cols:
+                char = temp_grid[r][c]
+                grid[target_r][target_c] = char
+                
+                coord_key = f"{r},{c}"
+                if coord_key in temp_signs:
+                    sign_texts[f"{target_r},{target_c}"] = temp_signs[coord_key]
 
 
 def load_map_from_file(filename):
@@ -282,7 +336,39 @@ while running:
                 elif len(text_input_val) < 80 and event.unicode.isprintable():
                     text_input_val += event.unicode
 
-        # --- 5. EDITOR STATE ---
+        # --- 5. SAVE TEMPLATE NAME MODAL STATE ---
+        elif app_state == "SAVE_TEMPLATE_NAME_MODAL":
+            if event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_RETURN:
+                    if template_name_input.strip() and template_select_start and template_select_end:
+                        r1, r2 = sorted([template_select_start[0], template_select_end[0]])
+                        c1, c2 = sorted([template_select_start[1], template_select_end[1]])
+
+                        temp_grid = []
+                        temp_signs = {}
+
+                        for r_idx, r in enumerate(range(r1, r2 + 1)):
+                            row_chars = []
+                            for c_idx, c in enumerate(range(c1, c2 + 1)):
+                                row_chars.append(grid[r][c])
+                                if f"{r},{c}" in sign_texts:
+                                    temp_signs[f"{r_idx},{c_idx}"] = sign_texts[f"{r},{c}"]
+                            temp_grid.append(row_chars)
+
+                        save_template_to_disk(template_name_input.strip(), temp_grid, temp_signs)
+                        is_creating_template = False
+                        template_select_start = None
+                        template_select_end = None
+                        app_state = "EDITOR"
+
+                elif event.key == pygame.K_BACKSPACE:
+                    template_name_input = template_name_input[:-1]
+                elif event.key == pygame.K_ESCAPE:
+                    app_state = "EDITOR"
+                elif len(template_name_input) < 20 and event.unicode.isprintable():
+                    template_name_input += event.unicode
+
+        # --- 6. EDITOR STATE ---
         elif app_state == "EDITOR":
             keys = pygame.key.get_pressed()
 
@@ -299,6 +385,9 @@ while running:
             elif event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_r:
                     reset_pan_zoom()
+                elif event.key == pygame.K_ESCAPE:
+                    selected_template = None
+                    is_creating_template = False
 
             elif event.type == pygame.MOUSEBUTTONDOWN:
                 if event.button == 2 or (event.button == 1 and keys[pygame.K_SPACE] and mouse_x < sidebar_x):
@@ -308,18 +397,17 @@ while running:
                 # SIDEBAR INTERACTION
                 elif mouse_x >= sidebar_x:
                     if event.button == 1:
-                        # Tab Switching Header
-                        tab_w = 72
-                        tab_objs_rect = pygame.Rect(sidebar_x + 12, 40, tab_w, 24)
-                        tab_cfg_rect = pygame.Rect(sidebar_x + 88, 40, tab_w, 24)
-                        tab_tls_rect = pygame.Rect(sidebar_x + 164, 40, tab_w, 24)
+                        # Tab Headers
+                        tab_w = 54
+                        t1 = pygame.Rect(sidebar_x + 8, 40, tab_w, 24)
+                        t2 = pygame.Rect(sidebar_x + 66, 40, tab_w, 24)
+                        t3 = pygame.Rect(sidebar_x + 124, 40, tab_w, 24)
+                        t4 = pygame.Rect(sidebar_x + 182, 40, tab_w, 24)
 
-                        if tab_objs_rect.collidepoint(mouse_x, mouse_y):
-                            sidebar_tab = "OBJECTS"
-                        elif tab_cfg_rect.collidepoint(mouse_x, mouse_y):
-                            sidebar_tab = "CONFIGS"
-                        elif tab_tls_rect.collidepoint(mouse_x, mouse_y):
-                            sidebar_tab = "TOOLS"
+                        if t1.collidepoint(mouse_x, mouse_y): sidebar_tab = "OBJECTS"
+                        elif t2.collidepoint(mouse_x, mouse_y): sidebar_tab = "CONFIGS"
+                        elif t3.collidepoint(mouse_x, mouse_y): sidebar_tab = "TOOLS"
+                        elif t4.collidepoint(mouse_x, mouse_y): sidebar_tab = "TEMPLATES"
 
                         # TAB 1: OBJECTS
                         elif sidebar_tab == "OBJECTS":
@@ -331,6 +419,7 @@ while running:
                                 btn_rect = pygame.Rect(sidebar_x + 12, btn_y, 225, 28)
                                 if btn_rect.collidepoint(mouse_x, mouse_y):
                                     selected_tool = item['char']
+                                    selected_template = None
                                 btn_y += 32
 
                         # TAB 2: CONFIGS
@@ -340,9 +429,9 @@ while running:
                                 btn_rect = pygame.Rect(sidebar_x + 12, btn_y, 225, 28)
                                 if btn_rect.collidepoint(mouse_x, mouse_y):
                                     selected_tool = item['char']
+                                    selected_template = None
                                 btn_y += 32
 
-                            # Canvas Size Adjust
                             if pygame.Rect(sidebar_x + 120, 190, 24, 22).collidepoint(mouse_x, mouse_y):
                                 resize_grid(grid_cols - 1, grid_rows)
                             elif pygame.Rect(sidebar_x + 185, 190, 24, 22).collidepoint(mouse_x, mouse_y):
@@ -353,7 +442,6 @@ while running:
                             elif pygame.Rect(sidebar_x + 185, 218, 24, 22).collidepoint(mouse_x, mouse_y):
                                 resize_grid(grid_cols, grid_rows + 1)
 
-                            # Switch Map Dropdown
                             dropdown_rect = pygame.Rect(sidebar_x + 12, 280, 225, 26)
                             if dropdown_rect.collidepoint(mouse_x, mouse_y):
                                 dropdown_open = not dropdown_open
@@ -369,7 +457,6 @@ while running:
 
                         # TAB 3: TOOLS
                         elif sidebar_tab == "TOOLS":
-                            # Pen Size Buttons
                             p1_rect = pygame.Rect(sidebar_x + 12, 110, 68, 26)
                             p2_rect = pygame.Rect(sidebar_x + 88, 110, 68, 26)
                             p3_rect = pygame.Rect(sidebar_x + 164, 110, 68, 26)
@@ -378,17 +465,34 @@ while running:
                             elif p2_rect.collidepoint(mouse_x, mouse_y): pen_size = 2
                             elif p3_rect.collidepoint(mouse_x, mouse_y): pen_size = 3
 
-                            # Auto Border Wall Button
                             border_btn = pygame.Rect(sidebar_x + 12, 180, 225, 32)
                             if border_btn.collidepoint(mouse_x, mouse_y):
                                 auto_add_border_walls()
 
-                        # Universal Save Button
+                        # TAB 4: TEMPLATES
+                        elif sidebar_tab == "TEMPLATES":
+                            create_btn = pygame.Rect(sidebar_x + 12, 80, 225, 30)
+                            if create_btn.collidepoint(mouse_x, mouse_y):
+                                is_creating_template = True
+                                selected_template = None
+                                template_select_start = None
+                                template_select_end = None
+
+                            t_y = 140
+                            for temp_file in get_templates_list():
+                                item_rect = pygame.Rect(sidebar_x + 12, t_y, 225, 26)
+                                if item_rect.collidepoint(mouse_x, mouse_y):
+                                    selected_template = load_template_from_disk(temp_file)
+                                    active_template_name = os.path.splitext(temp_file)[0]
+                                    is_creating_template = False
+                                t_y += 30
+
+                        # Save Button
                         save_rect = pygame.Rect(sidebar_x + 12, SCREEN_HEIGHT - 45, 225, 32)
                         if save_rect.collidepoint(mouse_x, mouse_y):
                             save_map_to_file()
 
-                # SCALED CANVAS PAINTING
+                # SCALED CANVAS PAINTING / TEMPLATE STAMPING
                 elif mouse_x < sidebar_x and not keys[pygame.K_SPACE]:
                     rel_x = mouse_x - pan_offset_x
                     rel_y = mouse_y - pan_offset_y
@@ -396,14 +500,33 @@ while running:
                     r = int(rel_y // current_tile_size)
 
                     if 0 <= r < grid_rows and 0 <= c < grid_cols:
-                        if event.button == 1:     # Left Click = Place
-                            paint_brush(r, c, selected_tool)
-                        elif event.button == 3:   # Right Click = Erase
-                            paint_brush(r, c, '.')
+                        if is_creating_template:
+                            if event.button == 1:
+                                template_select_start = (r, c)
+                                template_select_end = (r, c)
+                        elif selected_template:
+                            if event.button == 1:  # Stamp Template
+                                stamp_template(r, c, selected_template)
+                            elif event.button == 3:
+                                selected_template = None
+                        else:
+                            if event.button == 1:
+                                paint_brush(r, c, selected_tool)
+                            elif event.button == 3:
+                                paint_brush(r, c, '.')
 
             elif event.type == pygame.MOUSEBUTTONUP:
                 if event.button == 2 or event.button == 1:
                     is_panning = False
+                    if is_creating_template and template_select_start and mouse_x < sidebar_x:
+                        rel_x = mouse_x - pan_offset_x
+                        rel_y = mouse_y - pan_offset_y
+                        c = int(rel_x // current_tile_size)
+                        r = int(rel_y // current_tile_size)
+                        template_select_end = (max(0, min(grid_rows - 1, r)), max(0, min(grid_cols - 1, c)))
+                        
+                        template_name_input = "room_01"
+                        app_state = "SAVE_TEMPLATE_NAME_MODAL"
 
             elif event.type == pygame.MOUSEMOTION:
                 if is_panning:
@@ -412,7 +535,13 @@ while running:
                     pan_offset_x += dx
                     pan_offset_y += dy
                     pan_start_pos = (mouse_x, mouse_y)
-                elif mouse_x < sidebar_x and not keys[pygame.K_SPACE]:
+                elif is_creating_template and pygame.mouse.get_pressed()[0] and template_select_start and mouse_x < sidebar_x:
+                    rel_x = mouse_x - pan_offset_x
+                    rel_y = mouse_y - pan_offset_y
+                    c = int(rel_x // current_tile_size)
+                    r = int(rel_y // current_tile_size)
+                    template_select_end = (max(0, min(grid_rows - 1, r)), max(0, min(grid_cols - 1, c)))
+                elif mouse_x < sidebar_x and not keys[pygame.K_SPACE] and not selected_template and not is_creating_template:
                     rel_x = mouse_x - pan_offset_x
                     rel_y = mouse_y - pan_offset_y
                     c = int(rel_x // current_tile_size)
@@ -485,8 +614,8 @@ while running:
         b_txt = font.render("BACK", True, (220, 220, 230))
         screen.blit(b_txt, b_txt.get_rect(center=back_btn.center))
 
-    # 4. EDITOR & SIGN MODAL DISPLAY
-    elif app_state in ["EDITOR", "SIGN_TEXT_MODAL"]:
+    # 4. EDITOR DISPLAY
+    elif app_state in ["EDITOR", "SIGN_TEXT_MODAL", "SAVE_TEMPLATE_NAME_MODAL"]:
         # Render Scaled Grid Tiles
         for r in range(grid_rows):
             for c in range(grid_cols):
@@ -512,8 +641,40 @@ while running:
                     txt = small_font.render(char, True, (255, 255, 255))
                     screen.blit(txt, txt.get_rect(center=rect.center))
 
+        # --- TEMPLATE SELECTION BOX INDICATOR ---
+        if is_creating_template and template_select_start and template_select_end:
+            r1, r2 = sorted([template_select_start[0], template_select_end[0]])
+            c1, c2 = sorted([template_select_start[1], template_select_end[1]])
+
+            box_x = pan_offset_x + c1 * current_tile_size
+            box_y = pan_offset_y + r1 * current_tile_size
+            box_w = (c2 - c1 + 1) * current_tile_size
+            box_h = (r2 - r1 + 1) * current_tile_size
+
+            sel_rect = pygame.Rect(box_x, box_y, box_w, box_h)
+            pygame.draw.rect(screen, (80, 220, 255), sel_rect, 2)
+
+        # --- TEMPLATE STAMP STENCIL PREVIEW ---
+        elif selected_template and mouse_x < sidebar_x:
+            rel_x = mouse_x - pan_offset_x
+            rel_y = mouse_y - pan_offset_y
+            cur_c = int(rel_x // current_tile_size)
+            cur_r = int(rel_y // current_tile_size)
+
+            temp_grid = selected_template["grid"]
+            t_rows = len(temp_grid)
+            t_cols = len(temp_grid[0]) if t_rows > 0 else 0
+
+            stencil_rect = pygame.Rect(
+                pan_offset_x + cur_c * current_tile_size,
+                pan_offset_y + cur_r * current_tile_size,
+                t_cols * current_tile_size,
+                t_rows * current_tile_size
+            )
+            pygame.draw.rect(screen, (255, 220, 80), stencil_rect, 2)
+
         # --- CURSOR PEN SIZE PREVIEW INDICATOR ---
-        if mouse_x < sidebar_x:
+        elif mouse_x < sidebar_x and not is_creating_template:
             rel_x = mouse_x - pan_offset_x
             rel_y = mouse_y - pan_offset_y
             cur_c = int(rel_x // current_tile_size)
@@ -523,12 +684,12 @@ while running:
             start_c = cur_c - half
             start_r = cur_r - half
 
-            indicator_x = pan_offset_x + start_c * current_tile_size
-            indicator_y = pan_offset_y + start_r * current_tile_size
-            indicator_w = current_tile_size * pen_size
-            indicator_h = current_tile_size * pen_size
-
-            indicator_rect = pygame.Rect(indicator_x, indicator_y, indicator_w, indicator_h)
+            indicator_rect = pygame.Rect(
+                pan_offset_x + start_c * current_tile_size,
+                pan_offset_y + start_r * current_tile_size,
+                current_tile_size * pen_size,
+                current_tile_size * pen_size
+            )
             pygame.draw.rect(screen, (255, 220, 80), indicator_rect, 2)
 
         # Render Sidebar
@@ -540,13 +701,14 @@ while running:
         title_surf = font.render(f"MAP: {map_filename}", True, (240, 190, 40))
         screen.blit(title_surf, (sidebar_x + 12, 12))
 
-        # TAB SELECTION HEADERS
-        tab_w = 72
-        tab_objs_rect = pygame.Rect(sidebar_x + 12, 40, tab_w, 24)
-        tab_cfg_rect = pygame.Rect(sidebar_x + 88, 40, tab_w, 24)
-        tab_tls_rect = pygame.Rect(sidebar_x + 164, 40, tab_w, 24)
+        # TAB SELECTION HEADERS (4 Tabs)
+        tab_w = 54
+        t1 = pygame.Rect(sidebar_x + 8, 40, tab_w, 24)
+        t2 = pygame.Rect(sidebar_x + 66, 40, tab_w, 24)
+        t3 = pygame.Rect(sidebar_x + 124, 40, tab_w, 24)
+        t4 = pygame.Rect(sidebar_x + 182, 40, tab_w, 24)
 
-        for rect, name, tab_key in [(tab_objs_rect, "Objects", "OBJECTS"), (tab_cfg_rect, "Configs", "CONFIGS"), (tab_tls_rect, "Tools", "TOOLS")]:
+        for rect, name, tab_key in [(t1, "Objs", "OBJECTS"), (t2, "Cfg", "CONFIGS"), (t3, "Tools", "TOOLS"), (t4, "Tmplt", "TEMPLATES")]:
             is_active = (sidebar_tab == tab_key)
             pygame.draw.rect(screen, (55, 50, 75) if is_active else (35, 30, 45), rect, border_radius=3)
             pygame.draw.rect(screen, (255, 200, 50) if is_active else (60, 55, 75), rect, 1, border_radius=3)
@@ -564,7 +726,7 @@ while running:
                     continue
 
                 char = item['char']
-                is_selected = (selected_tool == char)
+                is_selected = (selected_tool == char and not selected_template)
                 btn_rect = pygame.Rect(sidebar_x + 12, btn_y, 225, 28)
 
                 pygame.draw.rect(screen, (35, 30, 45) if not is_selected else (55, 50, 75), btn_rect, border_radius=4)
@@ -586,7 +748,7 @@ while running:
             btn_y = 80
             for item in CONFIG_ITEMS:
                 char = item['char']
-                is_selected = (selected_tool == char)
+                is_selected = (selected_tool == char and not selected_template)
                 btn_rect = pygame.Rect(sidebar_x + 12, btn_y, 225, 28)
 
                 pygame.draw.rect(screen, (35, 30, 45) if not is_selected else (55, 50, 75), btn_rect, border_radius=4)
@@ -670,12 +832,39 @@ while running:
 
             pygame.draw.line(screen, (60, 55, 75), (sidebar_x + 12, 155), (SCREEN_WIDTH - 12, 155), 1)
 
-            # Auto Border Wall Button
             border_btn = pygame.Rect(sidebar_x + 12, 180, 225, 32)
             pygame.draw.rect(screen, (65, 55, 85), border_btn, border_radius=4)
             pygame.draw.rect(screen, (140, 120, 170), border_btn, 1, border_radius=4)
             b_lbl = font.render("AUTO BORDER WALL", True, (240, 230, 255))
             screen.blit(b_lbl, b_lbl.get_rect(center=border_btn.center))
+
+        # --- TAB CONTENT: TEMPLATES ---
+        elif sidebar_tab == "TEMPLATES":
+            create_btn = pygame.Rect(sidebar_x + 12, 80, 225, 30)
+            pygame.draw.rect(screen, (45, 160, 180) if not is_creating_template else (220, 180, 40), create_btn, border_radius=4)
+            c_lbl = font.render("+ CREATE TEMPLATE" if not is_creating_template else "DRAG CANVAS AREA...", True, (10, 10, 10))
+            screen.blit(c_lbl, c_lbl.get_rect(center=create_btn.center))
+
+            t_hdr = small_font.render("PREMADE TEMPLATES:", True, (240, 190, 40))
+            screen.blit(t_hdr, (sidebar_x + 12, 122))
+
+            t_y = 140
+            templates_list = get_templates_list()
+            if not templates_list:
+                no_t = small_font.render("No templates saved yet.", True, (140, 140, 160))
+                screen.blit(no_t, (sidebar_x + 12, t_y))
+            else:
+                for temp_file in templates_list:
+                    temp_name = os.path.splitext(temp_file)[0]
+                    is_t_sel = (selected_template and active_template_name == temp_name)
+                    item_rect = pygame.Rect(sidebar_x + 12, t_y, 225, 26)
+
+                    pygame.draw.rect(screen, (55, 50, 75) if is_t_sel else (35, 30, 45), item_rect, border_radius=3)
+                    pygame.draw.rect(screen, (255, 200, 50) if is_t_sel else (60, 55, 75), item_rect, 1, border_radius=3)
+
+                    t_txt = font.render(temp_name, True, (255, 255, 255) if is_t_sel else (200, 200, 220))
+                    screen.blit(t_txt, (item_rect.x + 8, item_rect.y + 5))
+                    t_y += 30
 
         # Save Button
         save_rect = pygame.Rect(sidebar_x + 12, SCREEN_HEIGHT - 45, 225, 32)
@@ -705,6 +894,30 @@ while running:
             screen.blit(in_txt, (t_box.x + 8, t_box.y + 7))
 
             h_txt = small_font.render("Press [ENTER] to Save | [ESC] Cancel", True, (150, 145, 165))
+            screen.blit(h_txt, (modal_box.x + 16, modal_box.y + 92))
+
+        # Save Template Name Modal
+        elif app_state == "SAVE_TEMPLATE_NAME_MODAL":
+            overlay = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
+            overlay.fill((0, 0, 0, 180))
+            screen.blit(overlay, (0, 0))
+
+            box_w, box_h = 420, 130
+            modal_box = pygame.Rect(SCREEN_WIDTH // 2 - box_w // 2, SCREEN_HEIGHT // 2 - box_h // 2, box_w, box_h)
+            pygame.draw.rect(screen, (22, 18, 28), modal_box, border_radius=6)
+            pygame.draw.rect(screen, (80, 220, 255), modal_box, 2, border_radius=6)
+
+            m_title = font.render("ENTER TEMPLATE NAME:", True, (80, 220, 255))
+            screen.blit(m_title, (modal_box.x + 16, modal_box.y + 16))
+
+            t_box = pygame.Rect(modal_box.x + 16, modal_box.y + 45, box_w - 32, 32)
+            pygame.draw.rect(screen, (12, 10, 16), t_box, border_radius=3)
+            pygame.draw.rect(screen, (100, 90, 120), t_box, 1, border_radius=3)
+
+            in_txt = font.render(template_name_input + "_", True, (255, 255, 255))
+            screen.blit(in_txt, (t_box.x + 8, t_box.y + 7))
+
+            h_txt = small_font.render("Press [ENTER] to Save Template | [ESC] Cancel", True, (150, 145, 165))
             screen.blit(h_txt, (modal_box.x + 16, modal_box.y + 92))
 
     pygame.display.flip()
