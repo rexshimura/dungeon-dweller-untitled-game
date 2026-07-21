@@ -29,6 +29,7 @@ from weapons.sword.sword import Sword
 
 # Assets package imports
 from assets.sign import DialogModal
+from assets.damage_text import DamageTextManager
 
 
 class GameEngine:
@@ -36,7 +37,7 @@ class GameEngine:
         self.screen = screen
         self.clock = pygame.time.Clock()
 
-        self.game_state = "MAIN_MENU"  # "MAIN_MENU", "LEVEL_SELECT", "LOADING", "GAMEPLAY"
+        self.game_state = "MAIN_MENU"
 
         # UI & Camera Systems
         self.main_menu = MainMenu(SCREEN_WIDTH, SCREEN_HEIGHT)
@@ -47,6 +48,7 @@ class GameEngine:
         self.controls_overlay = ControlsInfoOverlay(SCREEN_WIDTH, SCREEN_HEIGHT)
         self.custom_cursor = CustomCursor()
         self.camera = Camera()
+        self.damage_text_mgr = DamageTextManager()
 
         # Gameplay Entities
         self.walls, self.torches, self.signs, self.doors, self.keys, self.floor_tiles = [], [], [], [], [], []
@@ -104,6 +106,7 @@ class GameEngine:
             walls, torches, signs, doors, keys, slimes, floor_tiles
         )
         self.map_name = file_name
+        self.damage_text_mgr.clear()
 
     def get_next_level_file(self):
         if not os.path.exists("maps"):
@@ -243,6 +246,7 @@ class GameEngine:
 
             self.title_banner.update()
             self.controls_overlay.update()
+            self.damage_text_mgr.update()
             self.minimap_alpha += (self.target_alpha - self.minimap_alpha) * 0.15
             self.player_stats.update()
 
@@ -255,23 +259,28 @@ class GameEngine:
                 closed_door_rects = [door.rect for door in self.doors if not door.is_open]
                 active_obstacles = self.walls + closed_door_rects
 
-                # Delegated Slime Combat Handling
+                # Combat Handling with Player Knockback Support
                 SlimeCombatHandler.process_slime_combat(
-                    self.slimes, self.player_rect, self.sword, self.player_stats, active_obstacles
+                    self.slimes, self.player_rect, self.sword, self.player_stats, active_obstacles, player_controller=self.controller
                 )
 
-                # Player Movement
+                # Player Movement with Uniform Vector Normalization (Balanced WASD/Diagonals)
                 if not self.sword.is_dashing:
                     keys = pygame.key.get_pressed()
-                    dx = (keys[pygame.K_RIGHT] or keys[pygame.K_d]) - (keys[pygame.K_LEFT] or keys[pygame.K_a])
-                    dy = (keys[pygame.K_DOWN] or keys[pygame.K_s]) - (keys[pygame.K_UP] or keys[pygame.K_w])
+                    raw_dx = (keys[pygame.K_RIGHT] or keys[pygame.K_d]) - (keys[pygame.K_LEFT] or keys[pygame.K_a])
+                    raw_dy = (keys[pygame.K_DOWN] or keys[pygame.K_s]) - (keys[pygame.K_UP] or keys[pygame.K_w])
 
-                    if dx != 0 and dy != 0:
-                        dx *= 0.7071
-                        dy *= 0.7071
+                    move_dir = pygame.Vector2(raw_dx, raw_dy)
+                    if move_dir.length() > 0:
+                        move_dir = move_dir.normalize()
 
                     speed = self.player_stats.get_speed(self.sword.is_parrying)
-                    self.controller.move_player_exact(self.player_rect, dx * speed, dy * speed, active_obstacles)
+                    self.controller.move_player_exact(
+                        self.player_rect, 
+                        move_dir.x * speed, 
+                        move_dir.y * speed, 
+                        active_obstacles
+                    )
 
                 self.sword.update(self.player_rect, mouse_world, self.controller.move_player_exact, active_obstacles)
 
@@ -299,7 +308,7 @@ class GameEngine:
             )
             pygame.draw.rect(self.world_surface, CHEST_COLOR, self.chest_rect, border_radius=4)
             
-            # Render Slimes & Particles on World Surface (LINE-OF-SIGHT GATED)
+            # Render Slimes & Particles on World Surface (Line-of-Sight Gated)
             for slime in self.slimes:
                 slime_center = (slime.rect.centerx, slime.rect.centery)
                 
@@ -312,7 +321,10 @@ class GameEngine:
                 if is_visible:
                     slime.draw(self.world_surface)
 
-            pygame.draw.rect(self.world_surface, PLAYER_COLOR, self.player_rect, border_radius=2)
+            # Draw Player (Flash Red on Damage)
+            player_flash = getattr(self.player_stats, 'flash_timer', 0) > 0
+            player_color = (255, 60, 60) if player_flash else PLAYER_COLOR
+            pygame.draw.rect(self.world_surface, player_color, self.player_rect, border_radius=2)
 
             self.sword.draw(self.world_surface, self.player_rect, mouse_world)
             self.fog.draw(self.world_surface, self.player_rect, self.walls, self.torches)
@@ -320,7 +332,7 @@ class GameEngine:
             # Camera Pass
             self.camera.render(self.screen, self.world_surface, self.map_w, self.map_h)
 
-            # Crisp Overhead Enemy Text Pass (Line-of-Sight Gated)
+            # Crisp Overhead Enemy Text Pass
             cam_offset = (self.camera.cam_x, self.camera.cam_y)
             for slime in self.slimes:
                 slime.draw_overhead_ui(
@@ -330,6 +342,9 @@ class GameEngine:
                     fog=self.fog, 
                     player_rect=self.player_rect
                 )
+
+            # Crisp Animated Damage Numbers Pass
+            self.damage_text_mgr.draw(self.screen, camera_offset=cam_offset, zoom=ZOOM)
 
             # Floating Prompts
             p_pos = (self.player_rect.centerx, self.player_rect.centery)

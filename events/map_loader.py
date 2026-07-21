@@ -8,6 +8,7 @@ from assets.sign import SignTile
 from assets.door import DoorTile
 from assets.key import KeyTile
 from enemies.slime.small_slime import SmallSlime
+from enemies.slime.slime import Slime
 
 TILE_SIZE = 28
 
@@ -147,7 +148,7 @@ def load_map(maps_folder="maps", target_file=None):
                 if token == '1':
                     attachment = detect_attachment(raw_lines, r, c)
                     torches.append(TorchTile(rect, attachment))
-                elif token == 'S':
+                elif token == 'i':
                     coord_key = f"{r},{c}"
                     text = sign_data.get(coord_key, "A mysterious sign weathered by time...")
                     signs.append(SignTile(rect, text))
@@ -162,8 +163,11 @@ def load_map(maps_folder="maps", target_file=None):
                     key_id = COLOR_KEYS[min(idx, 4)]
                     keys.append(KeyTile(rect, key_id=key_id))
                 elif token == 'e':
-                    # Offsets centered relative to TILE_SIZE (28px)
-                    slimes.append(SmallSlime(c * TILE_SIZE + 7, r * TILE_SIZE + 8))
+                    # Small Slime (centered offset in 28px tile)
+                    slimes.append(SmallSlime(c * TILE_SIZE + 9, r * TILE_SIZE + 10))
+                elif token == 'S':
+                    # Medium Slime (centered offset in 28px tile)
+                    slimes.append(Slime(c * TILE_SIZE + 5, r * TILE_SIZE + 6))
                 elif token == 'P':
                     player_start = (c, r)
                 elif token == 'X':

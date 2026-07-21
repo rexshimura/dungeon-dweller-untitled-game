@@ -61,7 +61,7 @@ def create_sidebar_previews():
     return {
         '#': wall_preview,
         '.': floor_preview,
-        'S': sign_preview,
+        'i': sign_preview,
         '1': torch_preview,
         'D': door_preview
     }
@@ -75,7 +75,7 @@ OBJECT_ITEMS = [
     {'char': '.', 'name': 'Floor',       'symbol': '[.]', 'color': (20, 17, 26)},
     "-- Assets",
     {'char': 'D', 'name': 'Door (Open)', 'symbol': '[D]', 'color': (140, 85, 35)},
-    {'char': 'S', 'name': 'Sign',        'symbol': '[S]', 'color': (180, 110, 40)},
+    {'char': 'i', 'name': 'Sign',        'symbol': '[i]', 'color': (180, 110, 40)},
     {'char': '1', 'name': 'Torch',       'symbol': '[1]', 'color': (255, 140, 20)},
     "-- Conditional Assets",
     {'char': 'L0', 'name': 'Locked Door Gray',   'symbol': '[L0]', 'color': (160, 160, 170), 'tier': 0},
@@ -92,6 +92,7 @@ CONFIG_ITEMS = [
 
 MOB_ITEMS = [
     {'char': 'e', 'name': 'Small Slime', 'symbol': '[e]', 'color': (50, 210, 90)},
+    {'char': 'S', 'name': 'Slime',       'symbol': '[S]', 'color': (40, 185, 75)},
 ]
 
 # --- STATE VARIABLES ---
@@ -176,7 +177,7 @@ def redo():
     next_state = redo_stack.pop()
     grid = next_state['grid']
     sign_texts = next_state['signs']
-    grid_cols = last_state['cols']
+    grid_cols = next_state['cols']
     grid_rows = next_state['rows']
 
 
@@ -262,7 +263,7 @@ def paint_brush(center_r, center_c, tool):
             r, c = center_r + dr, center_c + dc
             if 0 <= r < grid_rows and 0 <= c < grid_cols:
                 grid[r][c] = tool
-                if tool == 'S':
+                if tool == 'i':
                     editing_sign_coord = f"{r},{c}"
                     text_input_val = sign_texts.get(editing_sign_coord, "")
                     app_state = "SIGN_TEXT_MODAL"
@@ -296,7 +297,11 @@ def load_map_from_file(filename):
 
         for r in range(min(grid_rows, loaded_rows)):
             for c in range(min(grid_cols, len(lines[r]))):
-                grid[r][c] = lines[r][c]
+                # Backward compatibility for old sign token 'S' vs new token 'i'
+                token = lines[r][c]
+                if token == 'S':
+                    token = 'i'
+                grid[r][c] = token
 
     json_path = os.path.join("maps", f"{map_filename}.json")
     if os.path.exists(json_path):
@@ -634,8 +639,8 @@ while running:
                     if 0 <= r < grid_rows and 0 <= c < grid_cols:
                         clicked_tile = grid[r][c]
                         
-                        # Click on an existing Sign 'S' on canvas to edit its text
-                        if event.button == 1 and clicked_tile == 'S' and selected_tool != 'S':
+                        # Click on an existing Sign 'i' on canvas to edit its text
+                        if event.button == 1 and clicked_tile == 'i' and selected_tool != 'i':
                             editing_sign_coord = f"{r},{c}"
                             text_input_val = sign_texts.get(editing_sign_coord, "")
                             app_state = "SIGN_TEXT_MODAL"
@@ -665,7 +670,7 @@ while running:
                     r = int(rel_y // current_tile_size)
 
                     if 0 <= r < grid_rows and 0 <= c < grid_cols:
-                        if event.buttons[0] and not selected_tool.startswith('L') and selected_tool != 'S':
+                        if event.buttons[0] and not selected_tool.startswith('L') and selected_tool != 'i':
                             paint_brush(r, c, selected_tool)
                         elif event.buttons[2]:
                             paint_brush(r, c, '.')
@@ -760,7 +765,8 @@ while running:
                 tile_color = (20, 17, 26)
                 if token == '#': tile_color = (42, 38, 54)
                 elif token == 'D': tile_color = (140, 85, 35)
-                elif token == 'e': tile_color = (50, 210, 90)  # Enemy Tile
+                elif token == 'e': tile_color = (50, 210, 90)   # Small Slime Tile
+                elif token == 'S': tile_color = (40, 185, 75)   # Medium Slime Tile
                 elif token.startswith('L'):
                     idx = int(token[1:]) if len(token) > 1 and token[1:].isdigit() else 0
                     tile_color = KEY_TIERS[min(idx, 4)]["color"]
@@ -781,7 +787,7 @@ while running:
                     if token.startswith('L'): lbl_str = "L"
                     elif token.startswith('K'): lbl_str = "K"
                     
-                    if lbl_str in ['S', 'P', 'X', '1', 'D', 'L', 'K', 'e']:
+                    if lbl_str in ['i', 'P', 'X', '1', 'D', 'L', 'K', 'e', 'S']:
                         txt = small_font.render(lbl_str, True, (255, 255, 255))
                         screen.blit(txt, txt.get_rect(center=rect.center))
 

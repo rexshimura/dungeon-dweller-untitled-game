@@ -19,11 +19,12 @@ class PlayerStats:
         self.mp_regen_rate = 0.003  # Slower MP regeneration rate
         
         self.base_damage = 3       # Regular Swing = 3 DMG (Thrust deals 2x = 6 DMG)
-        self.move_speed = 1.3
-        self.parry_speed = 0.9
+        self.move_speed = 1.6
+        self.parry_speed = 0.6
 
         # Invincibility frames when taking damage
         self.i_frames = 0
+        self.flash_timer = 0
 
         # Key Inventory System (Set of key IDs e.g., {"gray_key", "blue_key"})
         self.keys = set()
@@ -41,6 +42,9 @@ class PlayerStats:
         # Countdown invincibility timer
         if self.i_frames > 0:
             self.i_frames -= 1
+
+        if self.flash_timer > 0:
+            self.flash_timer -= 1    
 
         # Passive MP Regeneration
         if self.current_mp < self.max_mp:

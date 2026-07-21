@@ -6,11 +6,11 @@ class SlimeParticle:
     def __init__(self, x, y):
         self.x = x
         self.y = y
-        self.vx = random.uniform(-1.8, 1.8)
-        self.vy = random.uniform(-2.5, 0.8)
-        self.size = random.uniform(1.2, 2.5)
-        self.color = random.choice([(50, 210, 90), (120, 240, 150), (30, 170, 70)])
-        self.lifetime = random.randint(12, 22)
+        self.vx = random.uniform(-2.2, 2.2)
+        self.vy = random.uniform(-3.0, 1.0)
+        self.size = random.uniform(2.0, 3.5)
+        self.color = random.choice([(40, 190, 80), (100, 230, 130), (25, 150, 60)])
+        self.lifetime = random.randint(15, 25)
         self.alpha = 255
 
     def update(self):
@@ -18,8 +18,8 @@ class SlimeParticle:
         self.y += self.vy
         self.vy += 0.2
         self.lifetime -= 1
-        if self.lifetime < 8:
-            self.alpha = max(0, int((self.lifetime / 8) * 255))
+        if self.lifetime < 10:
+            self.alpha = max(0, int((self.lifetime / 10) * 255))
 
     def draw(self, surface):
         if self.lifetime <= 0:
@@ -29,28 +29,27 @@ class SlimeParticle:
         surface.blit(p_surf, (self.x - self.size, self.y - self.size))
 
 
-class SmallSlime:
+class Slime:
     def __init__(self, x, y):
-        # Shrunk rect dimensions (10x8)
-        self.rect = pygame.Rect(x, y, 10, 8)
-        self.name = "Small Slime"
+        self.rect = pygame.Rect(x, y, 18, 15)
+        self.name = "Slime"
         
-        # Health Stats
-        self.max_hp = 12
-        self.hp = 12
-        self.damage = 1
+        # Health & Combat Stats
+        self.max_hp = 24
+        self.hp = 24
+        self.damage = 2
         self.is_dead = False
 
-        # AI States: "IDLE", "CHASE", "CHARGE", "LUNGE", "STUNNED"
+        # AI States: Slower base crawl, but massive bounce/lunge range
         self.state = "IDLE"
-        self.detect_radius = 180
-        self.attack_range = 65
-        self.speed = 0.95  # Slightly nimbler speed for small size
+        self.detect_radius = 210
+        self.attack_range = 95
+        self.speed = 0.55  # Slower base speed
 
         self.charge_timer = 0
-        self.charge_duration = 30
+        self.charge_duration = 45
         self.lunge_timer = 0
-        self.lunge_duration = 16
+        self.lunge_duration = 26  # Longer duration for a farther leap
         self.stun_timer = 0
         self.attack_cooldown = 0
         
@@ -61,13 +60,12 @@ class SmallSlime:
         self.knockback_vec = pygame.Vector2(0, 0)
         self.particles = []
 
-        # High-Res UI Fonts for Screen Surface
-        self.ui_name_font = pygame.font.SysFont("Trebuchet MS", 10, bold=True)
-        self.ui_hp_font = pygame.font.SysFont("Arial", 9, bold=True)
+        self.ui_name_font = pygame.font.SysFont("Trebuchet MS", 11, bold=True)
+        self.ui_hp_font = pygame.font.SysFont("Arial", 10, bold=True)
 
     @property
     def hitbox(self):
-        return self.rect.inflate(2, 2)
+        return self.rect.inflate(4, 4)
 
     def take_damage(self, amount, knockback_source_pos=None):
         if self.is_dead:
@@ -84,24 +82,24 @@ class SmallSlime:
             p_vec = pygame.Vector2(knockback_source_pos[0], knockback_source_pos[1])
             diff = s_vec - p_vec
             if diff.length() > 0:
-                self.knockback_vec = diff.normalize() * 5.0
+                self.knockback_vec = diff.normalize() * 3.2
 
         if self.hp <= 0:
             self.hp = 0
             self.is_dead = True
-            for _ in range(12):
+            for _ in range(18):
                 self.particles.append(SlimeParticle(self.rect.centerx, self.rect.centery))
 
     def trigger_parry_stun(self, player_pos):
         self.state = "STUNNED"
-        self.stun_timer = 50
+        self.stun_timer = 60
         self.flash_timer = 15
         
         s_vec = pygame.Vector2(self.rect.centerx, self.rect.centery)
         p_vec = pygame.Vector2(player_pos[0], player_pos[1])
         diff = s_vec - p_vec
         if diff.length() > 0:
-            self.knockback_vec = diff.normalize() * 6.0
+            self.knockback_vec = diff.normalize() * 5.0
 
     def _has_line_of_sight(self, player_center, obstacles):
         start = (self.rect.centerx, self.rect.centery)
@@ -128,7 +126,7 @@ class SmallSlime:
 
         if self.knockback_vec.length() > 0.1:
             self._move_exact(self.knockback_vec.x, self.knockback_vec.y, obstacles)
-            self.knockback_vec *= 0.80
+            self.knockback_vec *= 0.82
         else:
             self.knockback_vec = pygame.Vector2(0, 0)
 
@@ -155,12 +153,12 @@ class SmallSlime:
 
         elif self.state == "LUNGE":
             self.lunge_timer -= 1
-            lunge_speed = 4.0
+            lunge_speed = 5.2  # Much faster, farther bounce distance
             self._move_exact(self.lunge_dir.x * lunge_speed, self.lunge_dir.y * lunge_speed, obstacles)
             
             if self.lunge_timer <= 0:
                 self.state = "CHASE" if has_los else "IDLE"
-                self.attack_cooldown = random.randint(50, 80)
+                self.attack_cooldown = random.randint(70, 100)
 
         else:
             if dist_to_player <= self.detect_radius and has_los:
@@ -203,12 +201,12 @@ class SmallSlime:
         h_scale = 0
 
         if self.state == "CHARGE":
-            offset_y = 2
-            h_scale = -2
+            offset_y = 3
+            h_scale = -3
         elif self.state == "LUNGE":
             progress = self.lunge_timer / self.lunge_duration
-            offset_y = int(math.sin(progress * math.pi) * -6)
-            h_scale = 2
+            offset_y = int(math.sin(progress * math.pi) * -12)  # Higher arc for bigger jump
+            h_scale = 4
 
         draw_rect.y += offset_y
         draw_rect.height += h_scale
@@ -224,21 +222,19 @@ class SmallSlime:
             body_color = (130, 160, 210)
             core_color = (180, 200, 240)
         else:
-            body_color = (50, 210, 90)
-            core_color = (120, 240, 150)
+            body_color = (40, 195, 80)
+            core_color = (110, 235, 140)
 
-        # Draw Small Eyeless Slime Body & Translucent Core
         pygame.draw.ellipse(surface, body_color, draw_rect)
-        core_rect = draw_rect.inflate(-3, -3)
-        if core_rect.width > 1 and core_rect.height > 1:
+        core_rect = draw_rect.inflate(-5, -5)
+        if core_rect.width > 2 and core_rect.height > 2:
             pygame.draw.ellipse(surface, core_color, core_rect)
 
-        # HP Bar (Below Slime on world surface, scaled down for smaller size)
         if self.state != "IDLE":
-            bar_w = 16
+            bar_w = 22
             bar_h = 2
             bar_x = draw_rect.centerx - bar_w // 2
-            bar_y = draw_rect.bottom + 2
+            bar_y = draw_rect.bottom + 3
 
             hp_ratio = max(0, self.hp / self.max_hp)
             pygame.draw.rect(surface, (15, 12, 20), (bar_x - 1, bar_y - 1, bar_w + 2, bar_h + 2), border_radius=1)
@@ -279,14 +275,13 @@ class SmallSlime:
             elif hasattr(fog, 'is_visible') and not fog.is_visible((self.rect.centerx, self.rect.centery)):
                 return
 
-        # Crisp Name Tag & HP Digits
         name_txt = self.ui_name_font.render(self.name, True, (240, 245, 240))
         name_x = screen_x - (name_txt.get_width() // 2)
-        name_y = screen_y_top - int(12 * zoom)
+        name_y = screen_y_top - int(14 * zoom)
         screen.blit(name_txt, (name_x, name_y))
 
         hp_str = f"{int(self.hp)}/{self.max_hp}"
         hp_txt = self.ui_hp_font.render(hp_str, True, (220, 225, 230))
         hp_x = screen_x - (hp_txt.get_width() // 2)
-        hp_y = screen_y_bottom + int(6 * zoom)
+        hp_y = screen_y_bottom + int(8 * zoom)
         screen.blit(hp_txt, (hp_x, hp_y))
