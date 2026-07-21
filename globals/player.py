@@ -11,16 +11,19 @@ KEY_COLORS = {
 class PlayerStats:
     def __init__(self):
         # Stats
-        self.max_hp = 100
-        self.current_hp = 100
+        self.max_hp = 10
+        self.current_hp = 10
         
         self.max_mp = 5
         self.current_mp = 5.0
-        self.mp_regen_rate = 0.015
+        self.mp_regen_rate = 0.003  # Slower MP regeneration rate
         
-        self.base_damage = 10
+        self.base_damage = 3       # Regular Swing = 3 DMG (Thrust deals 2x = 6 DMG)
         self.move_speed = 1.3
         self.parry_speed = 0.9
+
+        # Invincibility frames when taking damage
+        self.i_frames = 0
 
         # Key Inventory System (Set of key IDs e.g., {"gray_key", "blue_key"})
         self.keys = set()
@@ -35,6 +38,11 @@ class PlayerStats:
         return self.parry_speed if is_parrying else self.move_speed
 
     def update(self):
+        # Countdown invincibility timer
+        if self.i_frames > 0:
+            self.i_frames -= 1
+
+        # Passive MP Regeneration
         if self.current_mp < self.max_mp:
             self.current_mp = min(self.max_mp, self.current_mp + self.mp_regen_rate)
 
@@ -57,12 +65,12 @@ class PlayerStats:
         mp_y = screen_h - 22
 
         # 1. DRAW HP BAR
-        hp_ratio = self.current_hp / self.max_hp
-        pygame.draw.rect(surface, (20, 35, 25), (start_x, hp_y, bar_w, bar_h), border_radius=2)
-        pygame.draw.rect(surface, (45, 205, 85), (start_x, hp_y, int(bar_w * hp_ratio), bar_h), border_radius=2)
-        pygame.draw.rect(surface, (120, 180, 140), (start_x, hp_y, bar_w, bar_h), 1, border_radius=2)
+        hp_ratio = max(0.0, self.current_hp / self.max_hp)
+        pygame.draw.rect(surface, (35, 20, 25), (start_x, hp_y, bar_w, bar_h), border_radius=2)
+        pygame.draw.rect(surface, (230, 60, 60), (start_x, hp_y, int(bar_w * hp_ratio), bar_h), border_radius=2)
+        pygame.draw.rect(surface, (180, 100, 100), (start_x, hp_y, bar_w, bar_h), 1, border_radius=2)
         
-        hp_text = font.render(f"HP {int(self.current_hp)}/{self.max_hp}", True, (220, 255, 230))
+        hp_text = font.render(f"HP {int(self.current_hp)}/{self.max_hp}", True, (255, 220, 220))
         surface.blit(hp_text, (start_x + bar_w + 8, hp_y - 2))
 
         # 2. DRAW MP PIP BLOCKS
@@ -82,13 +90,12 @@ class PlayerStats:
         mp_text = font.render(f"MP {int(self.current_mp)}/{self.max_mp}", True, (100, 210, 255))
         surface.blit(mp_text, (start_x + bar_w + 8, mp_y - 2))
 
-        # 3. DRAW COLLECTED KEY ICONS (Replaces "Keys:" word)
+        # 3. DRAW COLLECTED KEY ICONS
         key_x = start_x + bar_w + 110
         key_y = mp_y + 2
         
         for key_id in sorted(self.keys):
             color = KEY_COLORS.get(key_id, (255, 215, 0))
-            # Draw Key Icon
             pygame.draw.circle(surface, color, (key_x, key_y), 3, 1)
             pygame.draw.rect(surface, color, (key_x + 2, key_y - 1, 5, 2))
             pygame.draw.rect(surface, color, (key_x + 5, key_y, 2, 2))

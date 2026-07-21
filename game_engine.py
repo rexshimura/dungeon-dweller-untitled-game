@@ -22,6 +22,7 @@ from events.loading import LoadingScreen
 from events.tab_menu import TabMenu
 from events.level_title import LevelTitleBanner
 from events.controls_info import ControlsInfoOverlay
+from events.combat.slime_combat import SlimeCombatHandler
 
 # Weapons directory imports
 from weapons.sword.sword import Sword
@@ -49,6 +50,7 @@ class GameEngine:
 
         # Gameplay Entities
         self.walls, self.torches, self.signs, self.doors, self.keys, self.floor_tiles = [], [], [], [], [], []
+        self.slimes = []
         self.player_rect = None
         self.chest_rect = None
         self.map_name = ""
@@ -75,7 +77,7 @@ class GameEngine:
 
     def reset_game(self, map_file=None):
         (
-            walls, torches, signs, doors, keys, floor_tiles,
+            walls, torches, signs, doors, keys, slimes, floor_tiles,
             player_start, exit_start, file_name,
             map_w, map_h
         ) = load_map("maps", target_file=map_file)
@@ -98,8 +100,8 @@ class GameEngine:
         exit_y = exit_start[1] * TILE_SIZE + 6
         self.chest_rect = pygame.Rect(exit_x, exit_y, 28, 28)
 
-        self.walls, self.torches, self.signs, self.doors, self.keys, self.floor_tiles = (
-            walls, torches, signs, doors, keys, floor_tiles
+        self.walls, self.torches, self.signs, self.doors, self.keys, self.slimes, self.floor_tiles = (
+            walls, torches, signs, doors, keys, slimes, floor_tiles
         )
         self.map_name = file_name
 
@@ -253,6 +255,12 @@ class GameEngine:
                 closed_door_rects = [door.rect for door in self.doors if not door.is_open]
                 active_obstacles = self.walls + closed_door_rects
 
+                # Delegated Slime Combat Handling
+                SlimeCombatHandler.process_slime_combat(
+                    self.slimes, self.player_rect, self.sword, self.player_stats, active_obstacles
+                )
+
+                # Player Movement
                 if not self.sword.is_dashing:
                     keys = pygame.key.get_pressed()
                     dx = (keys[pygame.K_RIGHT] or keys[pygame.K_d]) - (keys[pygame.K_LEFT] or keys[pygame.K_a])
@@ -290,6 +298,20 @@ class GameEngine:
                 self.doors, self.keys, self.floor_tiles
             )
             pygame.draw.rect(self.world_surface, CHEST_COLOR, self.chest_rect, border_radius=4)
+            
+            # Render Slimes & Particles on World Surface (LINE-OF-SIGHT GATED)
+            for slime in self.slimes:
+                slime_center = (slime.rect.centerx, slime.rect.centery)
+                
+                is_visible = True
+                if hasattr(self.fog, 'is_lit'):
+                    is_visible = self.fog.is_lit(slime_center)
+                elif hasattr(self.fog, 'is_visible'):
+                    is_visible = self.fog.is_visible(slime_center)
+
+                if is_visible:
+                    slime.draw(self.world_surface)
+
             pygame.draw.rect(self.world_surface, PLAYER_COLOR, self.player_rect, border_radius=2)
 
             self.sword.draw(self.world_surface, self.player_rect, mouse_world)
@@ -298,11 +320,20 @@ class GameEngine:
             # Camera Pass
             self.camera.render(self.screen, self.world_surface, self.map_w, self.map_h)
 
+            # Crisp Overhead Enemy Text Pass (Line-of-Sight Gated)
+            cam_offset = (self.camera.cam_x, self.camera.cam_y)
+            for slime in self.slimes:
+                slime.draw_overhead_ui(
+                    self.screen, 
+                    camera_offset=cam_offset, 
+                    zoom=ZOOM, 
+                    fog=self.fog, 
+                    player_rect=self.player_rect
+                )
+
             # Floating Prompts
             p_pos = (self.player_rect.centerx, self.player_rect.centery)
             if not self.modal.active and not self.tab_menu.active:
-                cam_offset = (self.camera.cam_x, self.camera.cam_y)
-                
                 prompt_drawn = False
                 for door in self.doors:
                     if door.check_proximity(p_pos):
@@ -323,11 +354,12 @@ class GameEngine:
             self.player_stats.draw_hud(self.screen, self.font)
             draw_minimap(self.screen, self.walls, self.player_rect, self.chest_rect, self.minimap_alpha, self.font)
             
-            # Location Title Banner
+            # Location Title Banner & Overlays
             self.title_banner.draw(self.screen)
-
-            # Separate Controls Overlay System
             self.controls_overlay.draw(self.screen)
+            
+            # Middle-Right Animated Parry Cooldown Widget
+            self.sword.draw_middle_right_cooldown(self.screen)
 
             self.modal.draw(self.screen, self.font)
             self.tab_menu.draw(self.screen)

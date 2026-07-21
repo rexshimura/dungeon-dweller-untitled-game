@@ -7,6 +7,7 @@ from assets.torch import TorchTile
 from assets.sign import SignTile
 from assets.door import DoorTile
 from assets.key import KeyTile
+from enemies.slime.small_slime import SmallSlime
 
 TILE_SIZE = 28
 
@@ -120,6 +121,7 @@ def load_map(maps_folder="maps", target_file=None):
     signs = []
     doors = []
     keys = []
+    slimes = []
     floor_tiles = []
     player_start = (1, 1)
     exit_start = (2, 2)
@@ -159,6 +161,9 @@ def load_map(maps_folder="maps", target_file=None):
                     idx = int(token[1:]) if len(token) > 1 and token[1:].isdigit() else 0
                     key_id = COLOR_KEYS[min(idx, 4)]
                     keys.append(KeyTile(rect, key_id=key_id))
+                elif token == 'e':
+                    # Offsets centered relative to TILE_SIZE (28px)
+                    slimes.append(SmallSlime(c * TILE_SIZE + 7, r * TILE_SIZE + 8))
                 elif token == 'P':
                     player_start = (c, r)
                 elif token == 'X':
@@ -176,6 +181,7 @@ def load_map(maps_folder="maps", target_file=None):
         signs, 
         doors,
         keys,
+        slimes,
         floor_tiles, 
         player_start, 
         exit_start, 
