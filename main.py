@@ -1,11 +1,19 @@
 import pygame
 import sys
-from map_loader import load_random_map, draw_dungeon, TILE_SIZE
+
+# Imported from events/ subfolder
+from events.map_loader import load_random_map, draw_dungeon, TILE_SIZE
+from events.main_menu import MainMenu
+from events.loading import LoadingScreen
+from events.tab_menu import TabMenu
+
+# Imported from root directory
 from minimap import draw_minimap
 from player import PlayerStats
 from weapons.sword.sword import Sword
 from fog import FogOfWar
 from sign import DialogModal
+from cursor import CustomCursor
 
 pygame.init()
 
@@ -50,6 +58,14 @@ def reset_game():
     return walls, torches, signs, floor_tiles, player_rect, chest_rect, file_name
 
 
+# Game Objects & State
+game_state = "MAIN_MENU"  # "MAIN_MENU", "LOADING", "GAMEPLAY"
+
+main_menu = MainMenu(SCREEN_WIDTH, SCREEN_HEIGHT)
+loading_screen = LoadingScreen(SCREEN_WIDTH, SCREEN_HEIGHT)
+tab_menu = TabMenu(SCREEN_WIDTH, SCREEN_HEIGHT)
+custom_cursor = CustomCursor()
+
 walls, torches, signs, floor_tiles, player_rect, chest_rect, map_name = reset_game()
 sword = Sword()
 player_stats = PlayerStats()
@@ -87,146 +103,203 @@ def move_player_exact(rect, dx, dy, walls):
 
 running = True
 while running:
-    view_w = SCREEN_WIDTH / ZOOM
-    view_h = SCREEN_HEIGHT / ZOOM
-
-    cam_x = player_rect.centerx - (view_w / 2)
-    cam_y = player_rect.centery - (view_h / 2)
-
-    screen_mouse_x, screen_mouse_y = pygame.mouse.get_pos()
-    mouse_world = pygame.Vector2(
-        cam_x + (screen_mouse_x / ZOOM),
-        cam_y + (screen_mouse_y / ZOOM)
-    )
-
-    player_pos = (player_rect.centerx, player_rect.centery)
-
-    # Check proximity to interactive signs
-    nearby_sign = None
-    for sign in signs:
-        if sign.check_proximity(player_pos):
-            nearby_sign = sign
-
-    for event in pygame.event.get():
-        if event.type == pygame.QUIT:
-            running = False
-            
-        elif event.type == pygame.MOUSEBUTTONDOWN:
-            if not modal.active:
-                if event.button == 1:
-                    sword.start_press()
-                elif event.button == 3:
-                    player_vec = pygame.Vector2(player_rect.centerx, player_rect.centery)
-                    sword.trigger_parry(player_vec, mouse_world)
-
-        elif event.type == pygame.MOUSEBUTTONUP:
-            if not modal.active:
-                if event.button == 1:
-                    player_vec = pygame.Vector2(player_rect.centerx, player_rect.centery)
-                    sword.release_attack(player_vec, mouse_world, player_stats)
-                elif event.button == 3:
-                    sword.release_parry()
-
-        elif event.type == pygame.KEYDOWN:
-            if event.key == pygame.K_e:
-                if modal.active:
-                    modal.hide()
-                elif nearby_sign:
-                    modal.show(nearby_sign.text)
-
-            elif event.key == pygame.K_ESCAPE:
-                if modal.active:
-                    modal.hide()
-                else:
+    # ---------------- MAIN MENU STATE ----------------
+    if game_state == "MAIN_MENU":
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                running = False
+            else:
+                menu_action = main_menu.handle_event(event)
+                if menu_action == "PLAY":
+                    loading_screen.start("GENERATE")
+                    game_state = "LOADING"
+                elif menu_action == "QUIT":
                     running = False
 
-            elif event.key == pygame.K_r:
-                walls, torches, signs, floor_tiles, player_rect, chest_rect, map_name = reset_game()
-                sword = Sword()
-                player_stats = PlayerStats()
-                modal.hide()
-                game_won = False
+        main_menu.draw(screen)
+        custom_cursor.draw(screen)
+        pygame.display.flip()
+        clock.tick(60)
 
-            elif event.key == pygame.K_m:
-                show_minimap = not show_minimap
-                TARGET_ALPHA = 220.0 if show_minimap else 0.0
+    # ---------------- LOADING SCREEN STATE ----------------
+    elif game_state == "LOADING":
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                running = False
 
-    minimap_alpha += (TARGET_ALPHA - minimap_alpha) * 0.15
+        loading_screen.update()
+        loading_screen.draw(screen)
+        custom_cursor.draw(screen)
 
-    player_stats.update()
+        if loading_screen.is_finished:
+            walls, torches, signs, floor_tiles, player_rect, chest_rect, map_name = reset_game()
+            sword = Sword()
+            player_stats = PlayerStats()
+            modal.hide()
+            tab_menu.hide()
+            game_won = False
+            game_state = "GAMEPLAY"
 
-    if not game_won and not modal.active:
-        if not sword.is_dashing:
-            keys = pygame.key.get_pressed()
-            dx = (keys[pygame.K_RIGHT] or keys[pygame.K_d]) - (keys[pygame.K_LEFT] or keys[pygame.K_a])
-            dy = (keys[pygame.K_DOWN] or keys[pygame.K_s]) - (keys[pygame.K_UP] or keys[pygame.K_w])
-            
-            if dx != 0 and dy != 0:
-                dx *= 0.7071
-                dy *= 0.7071
+        pygame.display.flip()
+        clock.tick(60)
 
-            move_player_exact(player_rect, dx * player_stats.move_speed, dy * player_stats.move_speed, walls)
+    # ---------------- GAMEPLAY STATE ----------------
+    elif game_state == "GAMEPLAY":
+        view_w = SCREEN_WIDTH / ZOOM
+        view_h = SCREEN_HEIGHT / ZOOM
 
-        sword.update(player_rect, mouse_world, move_player_exact, walls)
+        cam_x = player_rect.centerx - (view_w / 2)
+        cam_y = player_rect.centery - (view_h / 2)
 
-        if player_rect.colliderect(chest_rect):
-            game_won = True
+        screen_mouse_x, screen_mouse_y = pygame.mouse.get_pos()
+        mouse_world = pygame.Vector2(
+            cam_x + (screen_mouse_x / ZOOM),
+            cam_y + (screen_mouse_y / ZOOM)
+        )
 
-    # Render World
-    world_surface.fill(FLOOR_COLOR)
-    draw_dungeon(world_surface, walls, torches, signs, floor_tiles)
-    pygame.draw.rect(world_surface, CHEST_COLOR, chest_rect, border_radius=4)
-    pygame.draw.rect(world_surface, PLAYER_COLOR, player_rect, border_radius=2)
-    
-    sword.draw(world_surface, player_rect, mouse_world)
-    fog.draw(world_surface, player_rect, walls, torches)
+        player_pos = (player_rect.centerx, player_rect.centery)
 
-    # Scale camera view to window
-    camera_view = pygame.Surface((view_w, view_h), pygame.SRCALPHA)
-    camera_view.fill((*VOID_COLOR, 255))
+        nearby_sign = None
+        for sign in signs:
+            if sign.check_proximity(player_pos):
+                nearby_sign = sign
 
-    map_rect = pygame.Rect(0, 0, MAP_WIDTH, MAP_HEIGHT)
-    cam_rect = pygame.Rect(cam_x, cam_y, view_w, view_h)
-    
-    overlap_rect = cam_rect.clip(map_rect)
-    
-    if overlap_rect.width > 0 and overlap_rect.height > 0:
-        sub_surface = world_surface.subsurface(overlap_rect)
-        dest_x = overlap_rect.x - cam_x
-        dest_y = overlap_rect.y - cam_y
-        camera_view.blit(sub_surface, (dest_x, dest_y))
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                running = False
+                
+            # TAB MENU EVENTS
+            if tab_menu.active:
+                action = tab_menu.handle_event(event)
+                if action == "RESET":
+                    loading_screen.start("REGENERATE")
+                    game_state = "LOADING"
+                elif action == "MAIN_MENU":
+                    game_state = "MAIN_MENU"
 
-    scaled_surface = pygame.transform.smoothscale(camera_view, (SCREEN_WIDTH, SCREEN_HEIGHT))
-    screen.blit(scaled_surface, (0, 0))
+            elif event.type == pygame.MOUSEBUTTONDOWN:
+                if not modal.active:
+                    if event.button == 1:
+                        sword.start_press()
+                    elif event.button == 3:
+                        player_vec = pygame.Vector2(player_rect.centerx, player_rect.centery)
+                        sword.trigger_parry(player_vec, mouse_world)
 
-    # Floating interaction prompt
-    if nearby_sign and not modal.active:
-        nearby_sign.draw_prompt(screen, small_font, camera_offset=(cam_x, cam_y), zoom=ZOOM)
+            elif event.type == pygame.MOUSEBUTTONUP:
+                if not modal.active:
+                    if event.button == 1:
+                        player_vec = pygame.Vector2(player_rect.centerx, player_rect.centery)
+                        sword.release_attack(player_vec, mouse_world, player_stats)
+                    elif event.button == 3:
+                        sword.release_parry()
 
-    # HUD & UI Overlay
-    info_text = font.render(f"Map: {map_name} | [E] Read Sign | Left-Click: Attack", True, TEXT_COLOR)
-    screen.blit(info_text, (20, 15))
+            elif event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_TAB:
+                    if modal.active:
+                        modal.hide()
+                    tab_menu.show() if not tab_menu.active else tab_menu.hide()
 
-    player_stats.draw_hud(screen, font)
-    draw_minimap(screen, walls, player_rect, chest_rect, minimap_alpha, font)
-    modal.draw(screen, font)
+                elif event.key == pygame.K_e:
+                    if modal.active:
+                        modal.hide()
+                    elif nearby_sign:
+                        modal.show(nearby_sign.text)
 
-    current_fps = int(clock.get_fps())
-    fps_text = small_font.render(f"FPS: {current_fps}", True, (150, 255, 150))
-    fps_x = SCREEN_WIDTH - fps_text.get_width() - 15
-    fps_y = SCREEN_HEIGHT - fps_text.get_height() - 10
-    screen.blit(fps_text, (fps_x, fps_y))
+                elif event.key == pygame.K_ESCAPE:
+                    if modal.active:
+                        modal.hide()
+                    elif tab_menu.active:
+                        tab_menu.hide()
+                    else:
+                        tab_menu.show()
 
-    if game_won:
-        overlay = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
-        overlay.fill((0, 0, 0, 180))
-        screen.blit(overlay, (0, 0))
+                elif event.key == pygame.K_r:
+                    loading_screen.start("REGENERATE")
+                    game_state = "LOADING"
 
-        win_text = font.render("TREASURE LOCATED! Press 'R' for Next Map", True, CHEST_COLOR)
-        screen.blit(win_text, (SCREEN_WIDTH // 2 - win_text.get_width() // 2, SCREEN_HEIGHT // 2 - 20))
+                elif event.key == pygame.K_m:
+                    show_minimap = not show_minimap
+                    TARGET_ALPHA = 220.0 if show_minimap else 0.0
 
-    pygame.display.flip()
-    clock.tick(60)
+        minimap_alpha += (TARGET_ALPHA - minimap_alpha) * 0.15
+
+        player_stats.update()
+
+        if not game_won and not modal.active and not tab_menu.active:
+            if not sword.is_dashing:
+                keys = pygame.key.get_pressed()
+                dx = (keys[pygame.K_RIGHT] or keys[pygame.K_d]) - (keys[pygame.K_LEFT] or keys[pygame.K_a])
+                dy = (keys[pygame.K_DOWN] or keys[pygame.K_s]) - (keys[pygame.K_UP] or keys[pygame.K_w])
+                
+                if dx != 0 and dy != 0:
+                    dx *= 0.7071
+                    dy *= 0.7071
+
+                move_player_exact(player_rect, dx * player_stats.move_speed, dy * player_stats.move_speed, walls)
+
+            sword.update(player_rect, mouse_world, move_player_exact, walls)
+
+            if player_rect.colliderect(chest_rect):
+                game_won = True
+
+        # Render World
+        world_surface.fill(FLOOR_COLOR)
+        draw_dungeon(world_surface, walls, torches, signs, floor_tiles)
+        pygame.draw.rect(world_surface, CHEST_COLOR, chest_rect, border_radius=4)
+        pygame.draw.rect(world_surface, PLAYER_COLOR, player_rect, border_radius=2)
+        
+        sword.draw(world_surface, player_rect, mouse_world)
+        fog.draw(world_surface, player_rect, walls, torches)
+
+        camera_view = pygame.Surface((view_w, view_h), pygame.SRCALPHA)
+        camera_view.fill((*VOID_COLOR, 255))
+
+        map_rect = pygame.Rect(0, 0, MAP_WIDTH, MAP_HEIGHT)
+        cam_rect = pygame.Rect(cam_x, cam_y, view_w, view_h)
+        
+        overlap_rect = cam_rect.clip(map_rect)
+        
+        if overlap_rect.width > 0 and overlap_rect.height > 0:
+            sub_surface = world_surface.subsurface(overlap_rect)
+            dest_x = overlap_rect.x - cam_x
+            dest_y = overlap_rect.y - cam_y
+            camera_view.blit(sub_surface, (dest_x, dest_y))
+
+        scaled_surface = pygame.transform.smoothscale(camera_view, (SCREEN_WIDTH, SCREEN_HEIGHT))
+        screen.blit(scaled_surface, (0, 0))
+
+        # Floating Interaction Prompt
+        if nearby_sign and not modal.active and not tab_menu.active:
+            nearby_sign.draw_prompt(screen, small_font, camera_offset=(cam_x, cam_y), zoom=ZOOM)
+
+        # HUD Overlay
+        info_text = font.render(f"Map: {map_name} | [TAB] Pause Menu | [E] Read Sign", True, TEXT_COLOR)
+        screen.blit(info_text, (20, 15))
+
+        player_stats.draw_hud(screen, font)
+        draw_minimap(screen, walls, player_rect, chest_rect, minimap_alpha, font)
+        modal.draw(screen, font)
+        tab_menu.draw(screen)
+
+        current_fps = int(clock.get_fps())
+        fps_text = small_font.render(f"FPS: {current_fps}", True, (150, 255, 150))
+        fps_x = SCREEN_WIDTH - fps_text.get_width() - 15
+        fps_y = SCREEN_HEIGHT - fps_text.get_height() - 10
+        screen.blit(fps_text, (fps_x, fps_y))
+
+        if game_won:
+            overlay = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
+            overlay.fill((0, 0, 0, 180))
+            screen.blit(overlay, (0, 0))
+
+            win_text = font.render("TREASURE LOCATED! Press 'R' for Next Map", True, CHEST_COLOR)
+            screen.blit(win_text, (SCREEN_WIDTH // 2 - win_text.get_width() // 2, SCREEN_HEIGHT // 2 - 20))
+
+        # Render Custom Cursor on top of everything
+        custom_cursor.draw(screen)
+
+        pygame.display.flip()
+        clock.tick(60)
 
 pygame.quit()
 sys.exit()
