@@ -5,6 +5,7 @@ from minimap import draw_minimap
 from player import PlayerStats
 from weapons.sword.sword import Sword
 from fog import FogOfWar
+from sign import DialogModal
 
 pygame.init()
 
@@ -18,7 +19,7 @@ MAP_WIDTH, MAP_HEIGHT = 1600, 1200
 world_surface = pygame.Surface((MAP_WIDTH, MAP_HEIGHT))
 
 FLOOR_COLOR = (15, 12, 20)
-VOID_COLOR = (8, 6, 10)  # Dark void color for area outside level borders
+VOID_COLOR = (8, 6, 10)
 PLAYER_COLOR = (50, 230, 110)
 CHEST_COLOR = (240, 190, 40)
 TEXT_COLOR = (255, 255, 255)
@@ -26,10 +27,10 @@ TEXT_COLOR = (255, 255, 255)
 pos_x = 0.0
 pos_y = 0.0
 
+
 def reset_game():
     global pos_x, pos_y
-    # Unpack 6 values returned by map_loader including floor_tiles
-    walls, torches, floor_tiles, player_start, exit_start, file_name = load_random_map("maps")
+    walls, torches, signs, floor_tiles, player_start, exit_start, file_name = load_random_map("maps")
 
     player_size = 12
     offset = (TILE_SIZE - player_size) // 2
@@ -46,12 +47,14 @@ def reset_game():
     exit_y = exit_start[1] * TILE_SIZE + 6
     chest_rect = pygame.Rect(exit_x, exit_y, 28, 28)
 
-    return walls, torches, floor_tiles, player_rect, chest_rect, file_name
+    return walls, torches, signs, floor_tiles, player_rect, chest_rect, file_name
 
-walls, torches, floor_tiles, player_rect, chest_rect, map_name = reset_game()
+
+walls, torches, signs, floor_tiles, player_rect, chest_rect, map_name = reset_game()
 sword = Sword()
 player_stats = PlayerStats()
 fog = FogOfWar(vision_radius=180)
+modal = DialogModal()
 
 font = pygame.font.SysFont("Arial", 20)
 small_font = pygame.font.SysFont("Arial", 14)
@@ -60,6 +63,7 @@ game_won = False
 show_minimap = True
 minimap_alpha = 220.0
 TARGET_ALPHA = 220.0
+
 
 def move_player_exact(rect, dx, dy, walls):
     global pos_x, pos_y
@@ -80,12 +84,12 @@ def move_player_exact(rect, dx, dy, walls):
             if dy < 0: rect.top = wall.bottom
             pos_y = float(rect.y)
 
+
 running = True
 while running:
     view_w = SCREEN_WIDTH / ZOOM
     view_h = SCREEN_HEIGHT / ZOOM
 
-    # 1. ALWAYS KEEP PLAYER DEAD-CENTER (Unclamped Camera)
     cam_x = player_rect.centerx - (view_w / 2)
     cam_y = player_rect.centery - (view_h / 2)
 
@@ -95,30 +99,54 @@ while running:
         cam_y + (screen_mouse_y / ZOOM)
     )
 
+    player_pos = (player_rect.centerx, player_rect.centery)
+
+    # Check proximity to interactive signs
+    nearby_sign = None
+    for sign in signs:
+        if sign.check_proximity(player_pos):
+            nearby_sign = sign
+
     for event in pygame.event.get():
         if event.type == pygame.QUIT:
             running = False
             
         elif event.type == pygame.MOUSEBUTTONDOWN:
-            if event.button == 1:
-                sword.start_press()
-            elif event.button == 3:
-                player_vec = pygame.Vector2(player_rect.centerx, player_rect.centery)
-                sword.trigger_parry(player_vec, mouse_world)
+            if not modal.active:
+                if event.button == 1:
+                    sword.start_press()
+                elif event.button == 3:
+                    player_vec = pygame.Vector2(player_rect.centerx, player_rect.centery)
+                    sword.trigger_parry(player_vec, mouse_world)
 
         elif event.type == pygame.MOUSEBUTTONUP:
-            if event.button == 1:
-                player_vec = pygame.Vector2(player_rect.centerx, player_rect.centery)
-                sword.release_attack(player_vec, mouse_world, player_stats)
-            elif event.button == 3:
-                sword.release_parry()
+            if not modal.active:
+                if event.button == 1:
+                    player_vec = pygame.Vector2(player_rect.centerx, player_rect.centery)
+                    sword.release_attack(player_vec, mouse_world, player_stats)
+                elif event.button == 3:
+                    sword.release_parry()
 
         elif event.type == pygame.KEYDOWN:
-            if event.key == pygame.K_r:
-                walls, torches, floor_tiles, player_rect, chest_rect, map_name = reset_game()
+            if event.key == pygame.K_e:
+                if modal.active:
+                    modal.hide()
+                elif nearby_sign:
+                    modal.show(nearby_sign.text)
+
+            elif event.key == pygame.K_ESCAPE:
+                if modal.active:
+                    modal.hide()
+                else:
+                    running = False
+
+            elif event.key == pygame.K_r:
+                walls, torches, signs, floor_tiles, player_rect, chest_rect, map_name = reset_game()
                 sword = Sword()
                 player_stats = PlayerStats()
+                modal.hide()
                 game_won = False
+
             elif event.key == pygame.K_m:
                 show_minimap = not show_minimap
                 TARGET_ALPHA = 220.0 if show_minimap else 0.0
@@ -127,7 +155,7 @@ while running:
 
     player_stats.update()
 
-    if not game_won:
+    if not game_won and not modal.active:
         if not sword.is_dashing:
             keys = pygame.key.get_pressed()
             dx = (keys[pygame.K_RIGHT] or keys[pygame.K_d]) - (keys[pygame.K_LEFT] or keys[pygame.K_a])
@@ -144,16 +172,16 @@ while running:
         if player_rect.colliderect(chest_rect):
             game_won = True
 
-    # 2. RENDER WORLD, FLOOR TILES, & TORCHES TO LEVEL SURFACE
+    # Render World
     world_surface.fill(FLOOR_COLOR)
-    draw_dungeon(world_surface, walls, torches, floor_tiles)
+    draw_dungeon(world_surface, walls, torches, signs, floor_tiles)
     pygame.draw.rect(world_surface, CHEST_COLOR, chest_rect, border_radius=4)
     pygame.draw.rect(world_surface, PLAYER_COLOR, player_rect, border_radius=2)
     
     sword.draw(world_surface, player_rect, mouse_world)
     fog.draw(world_surface, player_rect, walls, torches)
 
-    # 3. CAMERA VIEW SURFACE (Render off-map void gracefully)
+    # Scale camera view to window
     camera_view = pygame.Surface((view_w, view_h), pygame.SRCALPHA)
     camera_view.fill((*VOID_COLOR, 255))
 
@@ -171,12 +199,17 @@ while running:
     scaled_surface = pygame.transform.smoothscale(camera_view, (SCREEN_WIDTH, SCREEN_HEIGHT))
     screen.blit(scaled_surface, (0, 0))
 
-    # 4. HUD OVERLAY
-    info_text = font.render(f"Map: {map_name} | Left-Click: Swing/Thrust | Right-Click: Parry", True, TEXT_COLOR)
+    # Floating interaction prompt
+    if nearby_sign and not modal.active:
+        nearby_sign.draw_prompt(screen, small_font, camera_offset=(cam_x, cam_y), zoom=ZOOM)
+
+    # HUD & UI Overlay
+    info_text = font.render(f"Map: {map_name} | [E] Read Sign | Left-Click: Attack", True, TEXT_COLOR)
     screen.blit(info_text, (20, 15))
 
     player_stats.draw_hud(screen, font)
     draw_minimap(screen, walls, player_rect, chest_rect, minimap_alpha, font)
+    modal.draw(screen, font)
 
     current_fps = int(clock.get_fps())
     fps_text = small_font.render(f"FPS: {current_fps}", True, (150, 255, 150))

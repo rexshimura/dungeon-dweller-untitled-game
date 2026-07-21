@@ -8,10 +8,10 @@ class PlayerStats:
         
         self.max_mp = 5
         self.current_mp = 5.0  # Float for smooth regeneration
-        self.mp_regen_rate = 0.005 # MP per frame
+        self.mp_regen_rate = 0.015  # Recovers 1 MP roughly every 1.1 seconds
         
         self.base_damage = 10
-        self.move_speed = 1.2
+        self.move_speed = 1.8  # Reduced walk speed for closer camera view
 
     def update(self):
         """Regenerate MP over time up to max_mp."""
@@ -30,37 +30,43 @@ class PlayerStats:
         return False
 
     def draw_hud(self, surface, font):
-        """Renders HP/MP bars and stat info on the screen HUD."""
-        start_x, start_y = 20, 45
-        bar_w, bar_h = 160, 14
-
-        # 1. DRAW HP BAR (Red)
-        hp_ratio = self.current_hp / self.max_hp
-        pygame.draw.rect(surface, (30, 30, 40), (start_x, start_y, bar_w, bar_h), border_radius=3)
-        pygame.draw.rect(surface, (220, 50, 60), (start_x, start_y, int(bar_w * hp_ratio), bar_h), border_radius=3)
-        pygame.draw.rect(surface, (180, 180, 200), (start_x, start_y, bar_w, bar_h), 1, border_radius=3)
+        """Renders compact HP/MP bars in the bottom-left corner."""
+        screen_h = surface.get_height()
         
-        hp_text = font.render(f"HP {int(self.current_hp)}/{self.max_hp}", True, (255, 255, 255))
-        surface.blit(hp_text, (start_x + bar_w + 10, start_y - 2))
+        # Sized down for a sleeker look
+        bar_w, bar_h = 120, 10
+        
+        # Placed in the bottom left corner
+        start_x = 15
+        hp_y = screen_h - 38
+        mp_y = screen_h - 22
+
+        # 1. DRAW HP BAR (Vibrant Green)
+        hp_ratio = self.current_hp / self.max_hp
+        pygame.draw.rect(surface, (20, 35, 25), (start_x, hp_y, bar_w, bar_h), border_radius=2)
+        pygame.draw.rect(surface, (45, 205, 85), (start_x, hp_y, int(bar_w * hp_ratio), bar_h), border_radius=2)
+        pygame.draw.rect(surface, (120, 180, 140), (start_x, hp_y, bar_w, bar_h), 1, border_radius=2)
+        
+        hp_text = font.render(f"HP {int(self.current_hp)}/{self.max_hp}", True, (220, 255, 230))
+        surface.blit(hp_text, (start_x + bar_w + 8, hp_y - 2))
 
         # 2. DRAW MP PIP BLOCKS (Cyan / Blue)
-        mp_y = start_y + 20
-        pip_w = (bar_w - 12) // self.max_mp
+        pip_w = (bar_w - 8) // self.max_mp
         
         for i in range(self.max_mp):
-            pip_x = start_x + i * (pip_w + 3)
+            pip_x = start_x + i * (pip_w + 2)
             # Background slot
-            pygame.draw.rect(surface, (20, 30, 45), (pip_x, mp_y, pip_w, bar_h - 2), border_radius=2)
+            pygame.draw.rect(surface, (15, 25, 35), (pip_x, mp_y, pip_w, bar_h - 2), border_radius=2)
             
             # Filled Pip check
             if i < int(self.current_mp):
                 pygame.draw.rect(surface, (40, 180, 255), (pip_x, mp_y, pip_w, bar_h - 2), border_radius=2)
             elif i == int(self.current_mp):
-                # Partial charge progress for active recovering pip
+                # Partial charge progress
                 partial = self.current_mp - int(self.current_mp)
                 pygame.draw.rect(surface, (20, 100, 160), (pip_x, mp_y, int(pip_w * partial), bar_h - 2), border_radius=2)
                 
-            pygame.draw.rect(surface, (100, 160, 220), (pip_x, mp_y, pip_w, bar_h - 2), 1, border_radius=2)
+            pygame.draw.rect(surface, (90, 150, 200), (pip_x, mp_y, pip_w, bar_h - 2), 1, border_radius=2)
 
-        mp_text = font.render(f"MP {int(self.current_mp)}/{self.max_mp}", True, (80, 200, 255))
-        surface.blit(mp_text, (start_x + bar_w + 10, mp_y - 2))
+        mp_text = font.render(f"MP {int(self.current_mp)}/{self.max_mp}", True, (100, 210, 255))
+        surface.blit(mp_text, (start_x + bar_w + 8, mp_y - 2))
