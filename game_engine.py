@@ -1,3 +1,4 @@
+import os
 import pygame
 import sys
 
@@ -14,10 +15,12 @@ from globals.cursor import CustomCursor
 from globals.fog import FogOfWar
 
 # Events package imports
-from events.map_loader import load_random_map, draw_dungeon, TILE_SIZE
+from events.map_loader import load_map, draw_dungeon, TILE_SIZE
 from events.main_menu import MainMenu
+from events.level_select import LevelSelectMenu
 from events.loading import LoadingScreen
 from events.tab_menu import TabMenu
+from events.level_title import LevelTitleBanner
 
 # Weapons directory imports
 from weapons.sword.sword import Sword
@@ -31,12 +34,14 @@ class GameEngine:
         self.screen = screen
         self.clock = pygame.time.Clock()
 
-        self.game_state = "MAIN_MENU"  # "MAIN_MENU", "LOADING", "GAMEPLAY"
+        self.game_state = "MAIN_MENU"  # "MAIN_MENU", "LEVEL_SELECT", "LOADING", "GAMEPLAY"
 
         # UI & Camera Systems
         self.main_menu = MainMenu(SCREEN_WIDTH, SCREEN_HEIGHT)
+        self.level_select = LevelSelectMenu(SCREEN_WIDTH, SCREEN_HEIGHT)
         self.loading_screen = LoadingScreen(SCREEN_WIDTH, SCREEN_HEIGHT)
         self.tab_menu = TabMenu(SCREEN_WIDTH, SCREEN_HEIGHT)
+        self.title_banner = LevelTitleBanner(SCREEN_WIDTH, SCREEN_HEIGHT)
         self.custom_cursor = CustomCursor()
         self.camera = Camera()
 
@@ -45,6 +50,7 @@ class GameEngine:
         self.player_rect = None
         self.chest_rect = None
         self.map_name = ""
+        self.selected_map_file = None
         self.map_w = MAP_WIDTH
         self.map_h = MAP_HEIGHT
         self.world_surface = pygame.Surface((self.map_w, self.map_h))
@@ -65,15 +71,16 @@ class GameEngine:
 
         self.reset_game()
 
-    def reset_game(self):
+    def reset_game(self, map_file=None):
         (
             walls, torches, signs, doors, keys, floor_tiles,
             player_start, exit_start, file_name,
             map_w, map_h
-        ) = load_random_map("maps")
+        ) = load_map("maps", target_file=map_file)
 
         self.map_w = map_w
         self.map_h = map_h
+        self.selected_map_file = file_name + ".txt"
 
         self.world_surface = pygame.Surface((self.map_w, self.map_h))
 
@@ -94,6 +101,17 @@ class GameEngine:
         )
         self.map_name = file_name
 
+    def get_next_level_file(self):
+        """Finds the next map file in maps/ directory alphabetically."""
+        if not os.path.exists("maps"):
+            return None
+        maps = sorted([f for f in os.listdir("maps") if f.endswith(".txt")])
+        if self.selected_map_file in maps:
+            idx = maps.index(self.selected_map_file)
+            if idx + 1 < len(maps):
+                return maps[idx + 1]
+        return None
+
     def handle_events(self):
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
@@ -102,10 +120,19 @@ class GameEngine:
             if self.game_state == "MAIN_MENU":
                 menu_action = self.main_menu.handle_event(event)
                 if menu_action == "PLAY":
-                    self.loading_screen.start("GENERATE")
-                    self.game_state = "LOADING"
+                    self.level_select.refresh_maps("maps")
+                    self.game_state = "LEVEL_SELECT"
                 elif menu_action == "QUIT":
                     return False
+
+            elif self.game_state == "LEVEL_SELECT":
+                selected = self.level_select.handle_event(event)
+                if selected == "MAIN_MENU":
+                    self.game_state = "MAIN_MENU"
+                elif selected:
+                    self.selected_map_file = selected
+                    self.loading_screen.start("GENERATE")
+                    self.game_state = "LOADING"
 
             elif self.game_state == "GAMEPLAY":
                 if self.tab_menu.active:
@@ -140,14 +167,12 @@ class GameEngine:
                             self.modal.hide()
                         self.tab_menu.show() if not self.tab_menu.active else self.tab_menu.hide()
 
-                    # INTERACTION KEY [E] (Opens Doors / Reads Signs)
                     elif event.key == pygame.K_e:
                         if self.modal.active:
                             self.modal.hide()
                         else:
                             p_pos = (self.player_rect.centerx, self.player_rect.centery)
                             
-                            # 1. Try Doors First
                             door_opened = False
                             for door in self.doors:
                                 if door.check_proximity(p_pos):
@@ -159,7 +184,6 @@ class GameEngine:
                                         door_opened = True
                                         break
                             
-                            # 2. Try Signs if no door was interacted with
                             if not door_opened:
                                 for sign in self.signs:
                                     if sign.check_proximity(p_pos):
@@ -175,8 +199,17 @@ class GameEngine:
                             self.tab_menu.show()
 
                     elif event.key == pygame.K_r:
-                        self.loading_screen.start("REGENERATE")
-                        self.game_state = "LOADING"
+                        if self.game_won:
+                            next_lvl = self.get_next_level_file()
+                            if next_lvl:
+                                self.selected_map_file = next_lvl
+                                self.loading_screen.start("GENERATE")
+                                self.game_state = "LOADING"
+                            else:
+                                self.game_state = "MAIN_MENU"
+                        else:
+                            self.loading_screen.start("REGENERATE")
+                            self.game_state = "LOADING"
 
                     elif event.key == pygame.K_m:
                         self.show_minimap = not self.show_minimap
@@ -188,29 +221,33 @@ class GameEngine:
         if self.game_state == "LOADING":
             self.loading_screen.update()
             if self.loading_screen.is_finished:
-                self.reset_game()
+                self.reset_game(map_file=self.selected_map_file)
                 self.sword = Sword()
                 self.player_stats = PlayerStats()
                 self.modal.hide()
                 self.tab_menu.hide()
                 self.game_won = False
+                
+                # Trigger Title Banner Animation upon loading completion
+                self.title_banner.trigger(area_name="Grimstone Fortress", level_name=self.map_name)
                 self.game_state = "GAMEPLAY"
 
         elif self.game_state == "GAMEPLAY":
             self.camera.update(self.player_rect)
             mouse_world = self.camera.get_mouse_world()
 
+            self.title_banner.update()
             self.minimap_alpha += (self.target_alpha - self.minimap_alpha) * 0.15
             self.player_stats.update()
 
             if not self.game_won and not self.modal.active and not self.tab_menu.active:
-                # 1. Key Pickup Collision Check
+                # Key Pickup Check
                 for key in self.keys:
                     if not key.collected and self.player_rect.colliderect(key.rect):
                         key.collected = True
                         self.player_stats.add_key(key.key_id)
 
-                # 2. Door Collisions (Closed doors act as physical obstacles)
+                # Door Collisions
                 closed_door_rects = [door.rect for door in self.doors if not door.is_open]
                 active_obstacles = self.walls + closed_door_rects
 
@@ -235,13 +272,16 @@ class GameEngine:
         if self.game_state == "MAIN_MENU":
             self.main_menu.draw(self.screen)
 
+        elif self.game_state == "LEVEL_SELECT":
+            self.level_select.draw(self.screen)
+
         elif self.game_state == "LOADING":
             self.loading_screen.draw(self.screen)
 
         elif self.game_state == "GAMEPLAY":
             mouse_world = self.camera.get_mouse_world()
 
-            # Render World Surface
+            # Render World
             self.world_surface.fill(FLOOR_COLOR)
             draw_dungeon(
                 self.world_surface, self.walls, self.torches, self.signs, 
@@ -253,15 +293,14 @@ class GameEngine:
             self.sword.draw(self.world_surface, self.player_rect, mouse_world)
             self.fog.draw(self.world_surface, self.player_rect, self.walls, self.torches)
 
-            # Camera Pass using dynamic map dimensions
+            # Camera Pass
             self.camera.render(self.screen, self.world_surface, self.map_w, self.map_h)
 
-            # Floating Prompts (Signs and Doors)
+            # Floating Prompts
             p_pos = (self.player_rect.centerx, self.player_rect.centery)
             if not self.modal.active and not self.tab_menu.active:
                 cam_offset = (self.camera.cam_x, self.camera.cam_y)
                 
-                # Check Door Prompt
                 prompt_drawn = False
                 for door in self.doors:
                     if door.check_proximity(p_pos):
@@ -269,7 +308,6 @@ class GameEngine:
                         prompt_drawn = True
                         break
                 
-                # Check Sign Prompt
                 if not prompt_drawn:
                     for sign in self.signs:
                         if sign.check_proximity(p_pos):
@@ -282,6 +320,10 @@ class GameEngine:
 
             self.player_stats.draw_hud(self.screen, self.font)
             draw_minimap(self.screen, self.walls, self.player_rect, self.chest_rect, self.minimap_alpha, self.font)
+            
+            # Render Cinematic Location Title Banner
+            self.title_banner.draw(self.screen)
+
             self.modal.draw(self.screen, self.font)
             self.tab_menu.draw(self.screen)
 
@@ -292,10 +334,13 @@ class GameEngine:
                 overlay = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
                 overlay.fill((0, 0, 0, 180))
                 self.screen.blit(overlay, (0, 0))
-                win_text = self.font.render("TREASURE LOCATED! Press 'R' for Next Map", True, CHEST_COLOR)
+
+                next_lvl = self.get_next_level_file()
+                msg = "LEVEL COMPLETE! Press 'R' for Next Level" if next_lvl else "ALL LEVELS COMPLETED! Press 'R' for Main Menu"
+                win_text = self.font.render(msg, True, CHEST_COLOR)
                 self.screen.blit(win_text, (SCREEN_WIDTH // 2 - win_text.get_width() // 2, SCREEN_HEIGHT // 2 - 20))
 
-        # Render custom cursor on top
+        # Render Custom Cursor
         self.custom_cursor.draw(self.screen)
         pygame.display.flip()
         self.clock.tick(60)

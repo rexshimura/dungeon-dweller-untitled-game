@@ -92,16 +92,19 @@ def detect_attachment(lines, r, c):
     return 'NONE'
 
 
-def load_random_map(maps_folder="maps"):
+def load_map(maps_folder="maps", target_file=None):
     if not os.path.exists(maps_folder):
         os.makedirs(maps_folder)
 
-    map_files = [f for f in os.listdir(maps_folder) if f.endswith(".txt")]
-    if not map_files:
-        raise FileNotFoundError(f"No map files found in '{maps_folder}'. Please create one in map_builder.py!")
-
-    chosen_file = random.choice(map_files)
-    filepath = os.path.join(maps_folder, chosen_file)
+    if target_file:
+        chosen_file = target_file
+        filepath = os.path.join(maps_folder, chosen_file)
+    else:
+        map_files = [f for f in os.listdir(maps_folder) if f.endswith(".txt")]
+        if not map_files:
+            raise FileNotFoundError(f"No map files found in '{maps_folder}'. Please create one in map_builder.py!")
+        chosen_file = random.choice(map_files)
+        filepath = os.path.join(maps_folder, chosen_file)
 
     json_path = os.path.splitext(filepath)[0] + ".json"
     sign_data = {}
@@ -122,7 +125,6 @@ def load_random_map(maps_folder="maps"):
     exit_start = (2, 2)
 
     with open(filepath, "r") as f:
-        # Splits multi-character tokens (like L0, K2) or single characters
         raw_lines = [line.strip().split() if ' ' in line.strip() else list(line.strip()) for line in f.readlines() if line.strip()]
 
     rows = len(raw_lines)
@@ -164,6 +166,7 @@ def load_random_map(maps_folder="maps"):
 
     random.seed()
 
+    clean_name = os.path.splitext(chosen_file)[0]
     map_width_px = cols * TILE_SIZE
     map_height_px = rows * TILE_SIZE
 
@@ -176,7 +179,7 @@ def load_random_map(maps_folder="maps"):
         floor_tiles, 
         player_start, 
         exit_start, 
-        chosen_file, 
+        clean_name, 
         map_width_px, 
         map_height_px
     )
